@@ -1,9 +1,10 @@
 `ifndef ASIC_DMA_SYS_DEFS_SVH
 `define ASIC_DMA_SYS_DEFS_SVH
 
-// Keep global definitions intentionally small until the DMA microarchitecture settles.
-`define DMA_ADDR_W      32
-`define DMA_DATA_W      32
+// Legacy compatibility header for early experiments. New RTL should prefer the
+// shared parameter definitions in rtl/dma_pkg.sv.
+`define DMA_ADDR_W      64
+`define DMA_DATA_W      64
 `define DMA_STRB_W      (`DMA_DATA_W / 8)
 `define DMA_LEN_W       16
 `define DMA_TAG_W       4

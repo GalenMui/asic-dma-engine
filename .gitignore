@@ -1,0 +1,17 @@
+# Simulation and lint artifacts
+sim/build/
+sim/*.log
+sim/*.vcd
+
+# Python cache
+__pycache__/
+*.pyc
+
+# ASIC flow artifacts
+asic/runs/
+openlane/runs/
+
+# Editor and OS noise
+.DS_Store
+
+.codex/

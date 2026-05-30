@@ -1,0 +1,4 @@
+{
+  "design_name": "dma_top",
+  "notes": "Placeholder only. Update floorplanning, libraries, clocks, and flow options during ASIC bring-up."
+}
