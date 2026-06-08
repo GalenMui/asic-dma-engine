@@ -2,12 +2,26 @@
 
 package dma_pkg;
 
-  // Shared project-wide defaults. These will be revisited once the Phase 1
-  // datapath and external integration assumptions are better defined.
+  // Phase 1/2 defaults. Later descriptor-based work can reuse this package,
+  // but the current top-level design is a 32-bit, single-shot DMA MVP.
   parameter int ADDR_WIDTH        = 64;
-  parameter int DATA_WIDTH        = 64;
+  parameter int DATA_WIDTH        = 32;
   parameter int ID_WIDTH          = 4;
   parameter int STRB_WIDTH        = DATA_WIDTH / 8;
+
+  localparam logic [31:0] VERSION_VALUE = 32'h0001_0000;
+
+  localparam logic [31:0] REG_CTRL        = 32'h0000_0000;
+  localparam logic [31:0] REG_STATUS      = 32'h0000_0004;
+  localparam logic [31:0] REG_SRC_ADDR_LO = 32'h0000_0008;
+  localparam logic [31:0] REG_SRC_ADDR_HI = 32'h0000_000c;
+  localparam logic [31:0] REG_DST_ADDR_LO = 32'h0000_0010;
+  localparam logic [31:0] REG_DST_ADDR_HI = 32'h0000_0014;
+  localparam logic [31:0] REG_LEN_BYTES   = 32'h0000_0018;
+  localparam logic [31:0] REG_IRQ_ENABLE  = 32'h0000_001c;
+  localparam logic [31:0] REG_IRQ_STATUS  = 32'h0000_0020;
+  localparam logic [31:0] REG_VERSION     = 32'h0000_0024;
+
   parameter int DESC_WORDS        = 8;
   parameter int DESC_BYTES        = 32;
   parameter int COMP_WORDS        = 8;

@@ -2,10 +2,14 @@
 sim/build/
 sim/*.log
 sim/*.vcd
+tb/cocotb/sim_build/
+tb/cocotb/results.xml
+tb/cocotb/*.vcd
 
 # Python cache
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # ASIC flow artifacts
 asic/runs/

@@ -1,57 +1,101 @@
-# Descriptor-Based AXI4 DMA Engine
+# ASIC DMA Engine
 
-This project is a scaffold for a descriptor-based AXI4 DMA engine with an
-AXI4-Lite control interface, a constrained AXI4 memory-mapped master datapath,
-and downstream ASIC timing-closure and physical-design work.
+`asic-dma-engine` is a small ASIC-oriented SystemVerilog DMA controller project.
+The current implementation focuses on a clean Phase 1/2 MVP: an AXI4-Lite
+control/status register block and a basic single-shot AXI4 memory-to-memory DMA
+transfer engine.
+
+The intent is portfolio-quality RTL for digital design roles: readable
+synthesizable SystemVerilog, simple interfaces, focused verification, and clear
+documentation about what is implemented versus planned.
 
 ## Current Status
 
-Skeleton only. The repository currently contains module shells, placeholder
-verification files, planning documents, a starter SDC, and OpenLane/OpenROAD
-placeholders. The DMA is not implemented yet, and no full AXI4 behavior should
-be assumed.
+Implemented now:
 
-## Planned Architecture
+- 32-bit AXI4-Lite CSR interface
+- Register map for source address, destination address, transfer length,
+  status, interrupt enable/status, and version
+- `CTRL.start` write-one-pulse transfer launch
+- Basic AXI4 master read/write datapath using single-beat aligned transfers
+- `busy`, `done`, `error`, and IRQ status behavior
+- Cocotb smoke tests for CSR access, successful transfer, and simple error
+  handling
 
-- AXI4-Lite slave for software control/status
-- Register block for descriptor/completion ring management
-- Descriptor fetch, decode, and scheduling pipeline
-- Read engine, FIFO buffering, write engine, and completion writer
-- Outstanding transaction tracking and interrupt aggregation
-- Optional cfg/dma CDC support
-- ASIC timing and physical-implementation collateral
+Intentionally not implemented yet:
 
-## Roadmap
+- Descriptor rings or scatter-gather DMA
+- Multiple outstanding AXI transactions
+- AXI burst coalescing or 4KB boundary splitting
+- Unaligned transfers or data width conversion
+- Clock domain crossing
+- OpenLane/OpenROAD ASIC flow
+- UVM or vendor-specific IP
 
-- Phase 0: skeleton and docs
-- Phase 1: register-programmed DMA MVP with simplified internal memory interface
-- Phase 2: FIFO and backpressure
-- Phase 3: AXI4-Lite control interface
-- Phase 4: descriptor ring
-- Phase 5: completion queue
-- Phase 6: constrained AXI4 memory master
-- Phase 7: outstanding transaction tracking
-- Phase 8: CDC
-- Phase 9: ASIC constraints and synthesis
-- Phase 10: place and route and PPA study
+## Block Diagram
 
-## Placeholder Commands
-
-Run the placeholder simulation flow:
-
-```sh
-make -C sim sim
+```text
+                AXI4-Lite slave
+                     |
+                     v
+           +-------------------+
+           |  axi_lite_regs    |
+           |  CSRs/status/IRQ  |
+           +---------+---------+
+                     |
+      start/src/dst/len/status
+                     |
+                     v
+           +-------------------+
+           |     dma_core      |
+           | single-shot FSM   |
+           +----+---------+----+
+                |         |
+             AXI read  AXI write
+                |         |
+                +----+----+
+                     v
+              AXI4 memory map
 ```
 
-Run the placeholder lint flow:
+## Repository Structure
 
-```sh
-make -C sim lint
+```text
+rtl/
+  dma_pkg.sv          Shared constants and simple project types
+  axi_lite_regs.sv    AXI4-Lite CSR block
+  dma_core.sv         Single-shot AXI4 DMA controller
+  dma_top.sv          Phase 1/2 top-level integration
+tb/cocotb/
+  Makefile
+  test_axi_lite_regs.py
+  test_dma_smoke.py
+docs/
+  register_map.md
+  architecture.md
+scripts/
+  lint.sh
+  test.sh
 ```
 
-Clean generated placeholder artifacts:
+Older descriptor-oriented placeholder modules remain in `rtl/` for later
+phases, but the current top-level build uses only the Phase 1/2 files listed
+above.
+
+## Running Checks
+
+Run RTL lint:
 
 ```sh
-make -C sim clean
+./scripts/lint.sh
 ```
 
+Run cocotb tests:
+
+```sh
+./scripts/test.sh
+```
+
+The test script expects `cocotb`, `make`, and a supported simulator such as
+Icarus Verilog to be installed. The lint script uses Verilator when available
+and falls back to Icarus Verilog for compile checking.
