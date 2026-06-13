@@ -13,7 +13,18 @@ LEN_BYTES = 0x18
 IRQ_ENABLE = 0x1C
 IRQ_STATUS = 0x20
 VERSION = 0x24
-VERSION_VALUE = 0x00010000
+DESC_BASE_LO = 0x28
+DESC_BASE_HI = 0x2C
+DESC_COUNT = 0x30
+MODE = 0x34
+DESC_INDEX = 0x38
+ERROR_CAUSE = 0x3C
+BYTES_REMAINING = 0x40
+ACTIVE_SRC_LO = 0x44
+ACTIVE_DST_LO = 0x48
+COMPLETED_DESC_COUNT = 0x4C
+COMPLETED_BYTE_COUNT_LO = 0x50
+VERSION_VALUE = 0x00080005
 
 
 def _set_axil_idle(dut):
@@ -34,7 +45,18 @@ async def reset_dut(dut):
     _set_axil_idle(dut)
     dut.busy_i.value = 0
     dut.done_set_i.value = 0
+    dut.single_done_set_i.value = 0
+    dut.desc_done_set_i.value = 0
+    dut.desc_list_done_set_i.value = 0
     dut.error_set_i.value = 0
+    dut.desc_active_i.value = 0
+    dut.desc_index_i.value = 0
+    dut.error_cause_i.value = 0
+    dut.bytes_remaining_i.value = 0
+    dut.active_src_addr_i.value = 0
+    dut.active_dst_addr_i.value = 0
+    dut.completed_desc_count_i.value = 0
+    dut.completed_byte_count_lo_i.value = 0
     dut.rst_n.value = 0
     for _ in range(5):
         await RisingEdge(dut.clk)
@@ -108,7 +130,11 @@ async def register_read_write_and_status_clear(dut):
     assert await axil_write(dut, DST_ADDR_LO, 0x55667788) == 0
     assert await axil_write(dut, DST_ADDR_HI, 0x00000002) == 0
     assert await axil_write(dut, LEN_BYTES, 0x40) == 0
-    assert await axil_write(dut, IRQ_ENABLE, 0x3) == 0
+    assert await axil_write(dut, IRQ_ENABLE, 0xF) == 0
+    assert await axil_write(dut, DESC_BASE_LO, 0x00004000) == 0
+    assert await axil_write(dut, DESC_BASE_HI, 0x00000003) == 0
+    assert await axil_write(dut, DESC_COUNT, 0x5) == 0
+    assert await axil_write(dut, MODE, 0x1) == 0
 
     for addr, expected in (
         (SRC_ADDR_LO, 0x11223344),
@@ -116,7 +142,35 @@ async def register_read_write_and_status_clear(dut):
         (DST_ADDR_LO, 0x55667788),
         (DST_ADDR_HI, 0x00000002),
         (LEN_BYTES, 0x40),
-        (IRQ_ENABLE, 0x3),
+        (IRQ_ENABLE, 0xF),
+        (DESC_BASE_LO, 0x00004000),
+        (DESC_BASE_HI, 0x00000003),
+        (DESC_COUNT, 0x5),
+        (MODE, 0x1),
+    ):
+        data, resp = await axil_read(dut, addr)
+        assert resp == 0
+        assert data == expected
+
+    dut.desc_index_i.value = 0x2
+    dut.error_cause_i.value = 0x6
+    dut.bytes_remaining_i.value = 0x24
+    dut.active_src_addr_i.value = 0x123456789
+    dut.active_dst_addr_i.value = 0xABCDEF012
+    dut.completed_desc_count_i.value = 0x3
+    dut.completed_byte_count_lo_i.value = 0x80
+    data, resp = await axil_read(dut, DESC_INDEX)
+    assert resp == 0
+    assert data == 0x2
+    data, resp = await axil_read(dut, ERROR_CAUSE)
+    assert resp == 0
+    assert data == 0x6
+    for addr, expected in (
+        (BYTES_REMAINING, 0x24),
+        (ACTIVE_SRC_LO, 0x23456789),
+        (ACTIVE_DST_LO, 0xBCDEF012),
+        (COMPLETED_DESC_COUNT, 0x3),
+        (COMPLETED_BYTE_COUNT_LO, 0x80),
     ):
         data, resp = await axil_read(dut, addr)
         assert resp == 0
@@ -128,14 +182,22 @@ async def register_read_write_and_status_clear(dut):
     assert data == VERSION_VALUE
 
     dut.busy_i.value = 1
+    dut.desc_active_i.value = 1
     data, _ = await axil_read(dut, STATUS)
-    assert data & 0x1
+    assert (data & 0x9) == 0x9
     dut.busy_i.value = 0
+    dut.desc_active_i.value = 0
 
     dut.done_set_i.value = 1
+    dut.single_done_set_i.value = 1
+    dut.desc_done_set_i.value = 1
+    dut.desc_list_done_set_i.value = 1
     dut.error_set_i.value = 1
     await RisingEdge(dut.clk)
     dut.done_set_i.value = 0
+    dut.single_done_set_i.value = 0
+    dut.desc_done_set_i.value = 0
+    dut.desc_list_done_set_i.value = 0
     dut.error_set_i.value = 0
     await RisingEdge(dut.clk)
 
@@ -144,16 +206,27 @@ async def register_read_write_and_status_clear(dut):
     assert (data & 0x6) == 0x6
     data, resp = await axil_read(dut, IRQ_STATUS)
     assert resp == 0
-    assert (data & 0x3) == 0x3
+    assert (data & 0xF) == 0xF
     assert int(dut.irq_o.value) == 1
 
+    assert await axil_write(dut, STATUS, 0x0) == 0
+    assert await axil_write(dut, IRQ_STATUS, 0x0) == 0
+    data, _ = await axil_read(dut, STATUS)
+    assert (data & 0x6) == 0x6
+    data, _ = await axil_read(dut, IRQ_STATUS)
+    assert (data & 0xF) == 0xF
+
     assert await axil_write(dut, STATUS, 0x6) == 0
-    assert await axil_write(dut, IRQ_STATUS, 0x3) == 0
+    assert await axil_write(dut, IRQ_STATUS, 0xF) == 0
     data, _ = await axil_read(dut, STATUS)
     assert (data & 0x6) == 0
     data, _ = await axil_read(dut, IRQ_STATUS)
-    assert (data & 0x3) == 0
+    assert (data & 0xF) == 0
     assert int(dut.irq_o.value) == 0
+
+    _, resp = await axil_read(dut, 0x100)
+    assert resp == 2
+    assert await axil_write(dut, 0x100, 0x1) == 2
 
 
 @cocotb.test()

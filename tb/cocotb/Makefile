@@ -5,6 +5,10 @@ RTL_DIR := $(abspath ../../rtl)
 
 VERILOG_SOURCES = \
 	$(RTL_DIR)/dma_pkg.sv \
+	$(RTL_DIR)/outstanding_table.sv \
+	$(RTL_DIR)/cdc_toggle_sync.sv \
+	$(RTL_DIR)/cdc_pulse_sync.sv \
+	$(RTL_DIR)/cdc_bus_handshake.sv \
 	$(RTL_DIR)/axi_lite_regs.sv \
 	$(RTL_DIR)/dma_core.sv \
 	$(RTL_DIR)/dma_top.sv

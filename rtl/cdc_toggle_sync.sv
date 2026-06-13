@@ -10,8 +10,8 @@ module cdc_toggle_sync (
   output logic dst_pulse
 );
 
-  // Intended future usage: move infrequent state changes from one clock domain
-  // into another by synchronizing a toggle and edge-detecting it at the sink.
+  // Move infrequent state changes from one clock domain into another by
+  // synchronizing a toggle and edge-detecting it at the sink.
 
   logic sync_ff1;
   logic sync_ff2;

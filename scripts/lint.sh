@@ -5,6 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 RTL_FILES=(
   "$ROOT_DIR/rtl/dma_pkg.sv"
+  "$ROOT_DIR/rtl/outstanding_table.sv"
+  "$ROOT_DIR/rtl/cdc_toggle_sync.sv"
+  "$ROOT_DIR/rtl/cdc_pulse_sync.sv"
+  "$ROOT_DIR/rtl/cdc_bus_handshake.sv"
   "$ROOT_DIR/rtl/axi_lite_regs.sv"
   "$ROOT_DIR/rtl/dma_core.sv"
   "$ROOT_DIR/rtl/dma_top.sv"

@@ -9,8 +9,8 @@ module cdc_pulse_sync (
   output logic dst_pulse
 );
 
-  // Intended future usage: convert a source-domain pulse into a toggle, then
-  // recreate a single-cycle pulse in the destination domain.
+  // Convert a source-domain pulse into a toggle, then recreate a single-cycle
+  // pulse in the destination domain.
 
   logic src_toggle;
   logic dst_toggle;

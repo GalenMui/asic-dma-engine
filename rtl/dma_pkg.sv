@@ -2,14 +2,15 @@
 
 package dma_pkg;
 
-  // Phase 1/2 defaults. Later descriptor-based work can reuse this package,
-  // but the current top-level design is a 32-bit, single-shot DMA MVP.
+  // Current integration defaults. The top-level path is a conservative
+  // burst-capable AXI DMA with linear descriptor processing, bounded
+  // outstanding tracking, and explicit top-level CDC.
   parameter int ADDR_WIDTH        = 64;
   parameter int DATA_WIDTH        = 32;
   parameter int ID_WIDTH          = 4;
   parameter int STRB_WIDTH        = DATA_WIDTH / 8;
 
-  localparam logic [31:0] VERSION_VALUE = 32'h0001_0000;
+  localparam logic [31:0] VERSION_VALUE = 32'h0008_0005;
 
   localparam logic [31:0] REG_CTRL        = 32'h0000_0000;
   localparam logic [31:0] REG_STATUS      = 32'h0000_0004;
@@ -21,14 +22,49 @@ package dma_pkg;
   localparam logic [31:0] REG_IRQ_ENABLE  = 32'h0000_001c;
   localparam logic [31:0] REG_IRQ_STATUS  = 32'h0000_0020;
   localparam logic [31:0] REG_VERSION     = 32'h0000_0024;
+  localparam logic [31:0] REG_DESC_BASE_LO = 32'h0000_0028;
+  localparam logic [31:0] REG_DESC_BASE_HI = 32'h0000_002c;
+  localparam logic [31:0] REG_DESC_COUNT   = 32'h0000_0030;
+  localparam logic [31:0] REG_MODE         = 32'h0000_0034;
+  localparam logic [31:0] REG_DESC_INDEX   = 32'h0000_0038;
+  localparam logic [31:0] REG_ERROR_CAUSE  = 32'h0000_003c;
+  localparam logic [31:0] REG_BYTES_REMAINING       = 32'h0000_0040;
+  localparam logic [31:0] REG_ACTIVE_SRC_LO         = 32'h0000_0044;
+  localparam logic [31:0] REG_ACTIVE_DST_LO         = 32'h0000_0048;
+  localparam logic [31:0] REG_COMPLETED_DESC_COUNT  = 32'h0000_004c;
+  localparam logic [31:0] REG_COMPLETED_BYTE_COUNT_LO = 32'h0000_0050;
+
+  localparam logic [31:0] ERROR_CAUSE_NONE                 = 32'h0000_0000;
+  localparam logic [31:0] ERROR_CAUSE_ZERO_LEN             = 32'h0000_0001;
+  localparam logic [31:0] ERROR_CAUSE_SRC_UNALIGNED        = 32'h0000_0002;
+  localparam logic [31:0] ERROR_CAUSE_DST_UNALIGNED        = 32'h0000_0003;
+  localparam logic [31:0] ERROR_CAUSE_LEN_UNALIGNED        = 32'h0000_0004;
+  localparam logic [31:0] ERROR_CAUSE_DESC_BASE_UNALIGNED  = 32'h0000_0005;
+  localparam logic [31:0] ERROR_CAUSE_DESC_COUNT_ZERO      = 32'h0000_0006;
+  localparam logic [31:0] ERROR_CAUSE_DESC_INVALID         = 32'h0000_0007;
+  localparam logic [31:0] ERROR_CAUSE_AXI_READ             = 32'h0000_0008;
+  localparam logic [31:0] ERROR_CAUSE_AXI_WRITE            = 32'h0000_0009;
+  localparam logic [31:0] ERROR_CAUSE_DESC_BUS_UNSUPPORTED = 32'h0000_000a;
+  localparam logic [31:0] ERROR_CAUSE_DESC_WRITEBACK       = 32'h0000_000b;
+  localparam logic [31:0] ERROR_CAUSE_OUTSTANDING_TABLE    = 32'h0000_000c;
+  localparam logic [31:0] ERROR_CAUSE_DESC_MODE_UNSUPPORTED = 32'h0000_000d;
+  localparam logic [31:0] ERROR_CAUSE_TILE_ROW_BYTES_ZERO   = 32'h0000_000e;
+  localparam logic [31:0] ERROR_CAUSE_TILE_ROW_COUNT_ZERO   = 32'h0000_000f;
+  localparam logic [31:0] ERROR_CAUSE_TILE_SRC_STRIDE       = 32'h0000_0010;
+  localparam logic [31:0] ERROR_CAUSE_TILE_DST_STRIDE       = 32'h0000_0011;
 
   parameter int DESC_WORDS        = 8;
   parameter int DESC_BYTES        = 32;
+  parameter int TILE_DESC_WORDS   = 16;
+  parameter int TILE_DESC_BYTES   = 64;
   parameter int COMP_WORDS        = 8;
   parameter int COMP_BYTES        = 32;
   parameter int FIFO_DEPTH        = 16;
-  parameter int OUTSTANDING_DEPTH = 8;
+  parameter int OUTSTANDING_DEPTH = 4;
   parameter int MAX_BURST_LEN     = 16;
+
+  localparam logic [3:0] DESC_MODE_LINEAR = 4'd0;
+  localparam logic [3:0] DESC_MODE_2D     = 4'd1;
 
   typedef enum logic [1:0] {
     DESC_STATUS_IDLE,
