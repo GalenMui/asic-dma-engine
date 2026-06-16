@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference-model scaffolding for the descriptor-based AXI4 DMA engine."""
+"""Reference-model scaffold for the descriptor-based AXI4 DMA engine."""
 
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -30,12 +30,10 @@ class Completion:
 
 
 class DmaModel:
-    """High-level behavioral placeholder for future checking."""
+    """High-level behavioral scaffold for future checking."""
 
     def execute(self, descriptor: Descriptor) -> Completion:
-        """Return a placeholder completion until copy behavior is modeled."""
-        # TODO: Model expected memory copy behavior, completion formatting,
-        # descriptor ownership transitions, and error handling.
+        """Return an internal-error completion until copy behavior is modeled."""
         return Completion(
             desc_id=descriptor.desc_id,
             status=CompletionStatus.INTERNAL_ERROR,

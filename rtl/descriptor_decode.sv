@@ -14,9 +14,8 @@ module descriptor_decode (
 
   import dma_pkg::*;
 
-  // Future role: validate descriptor format, derive internal commands, and
-  // reject unsupported operations before they consume datapath resources.
-  // TODO: Enforce alignment, burst-length, and transfer-size restrictions.
+  // Inactive scaffold from an earlier modular descriptor pipeline. The active
+  // descriptor decode checks are integrated in dma_core.sv.
 
   always_comb begin
     desc_in_ready = 1'b0;

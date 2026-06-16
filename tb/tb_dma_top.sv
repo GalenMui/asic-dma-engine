@@ -102,9 +102,8 @@ module tb_dma_top;
   end
 
   initial begin
-    // TODO: Add directed register programming and descriptor submission flows.
-    // TODO: Hook up the future AXI-Lite driver, memory model, scoreboard, and
-    // assertions once functional behavior exists.
+    // Inactive SystemVerilog smoke scaffold. The active tests live under
+    // tb/cocotb.
     repeat (50) @(posedge cfg_clk);
     $finish;
   end

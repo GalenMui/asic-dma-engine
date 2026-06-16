@@ -38,10 +38,8 @@ module axi_memory_model #(
   input  logic                      s_axi_rready
 );
 
-  // Placeholder for a future randomized AXI memory model.
-  // TODO: Add randomized ARREADY, RVALID, AWREADY, WREADY, and BVALID stalls.
-  // TODO: Inject programmable RRESP/BRESP errors.
-  // TODO: Add backing memory storage and transaction logging.
+  // Inactive SystemVerilog memory model scaffold. The active behavioral memory
+  // model lives in tb/cocotb/test_dma_smoke.py.
 
   always_comb begin
     s_axi_awready = 1'b0;

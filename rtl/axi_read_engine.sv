@@ -36,10 +36,8 @@ module axi_read_engine #(
 
   localparam logic [2:0] AXI_SIZE_BYTES = $clog2(DATA_WIDTH / 8);
 
-  // Future role: turn internal read commands into constrained AXI4 INCR bursts
-  // and stream returned data into the FIFO path.
-  // TODO: Generate aligned AR bursts only.
-  // TODO: Validate RRESP, RLAST, beat counts, and outstanding allocations.
+  // Inactive scaffold from an earlier split datapath. The active AXI read
+  // behavior is integrated in dma_core.sv.
 
   always_comb begin
     cmd_ready    = 1'b0;

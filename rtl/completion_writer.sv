@@ -19,9 +19,8 @@ module completion_writer #(
 
   import dma_pkg::*;
 
-  // Future role: format completion entries and push them into the write path.
-  // TODO: Advance COMP_HEAD only after the completion write response is
-  // accepted without error.
+  // Inactive scaffold from an earlier completion-queue direction. The active
+  // design writes descriptor status words directly from dma_core.sv.
 
   always_comb begin
     comp_ready         = 1'b0;

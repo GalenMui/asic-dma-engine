@@ -1,168 +1,114 @@
 # Architecture
 
-## Overview
+This document describes the active integrated RTL baseline. It is grounded in
+the filelist used by `scripts/lint.sh`, `tb/cocotb/Makefile`, and
+`sim/filelist.f`.
 
-The current design is a compact register-programmed DMA engine with optional
-linear and 2D strided descriptor processing. Software can either program one
-source, destination, and byte length directly, configure a descriptor base/count
-for linear descriptors, or use a 64-byte tiled descriptor for row-strided 2D
-movement.
+## Active Modules
 
-The integrated top-level build uses:
+- `dma_pkg`: shared constants, register offsets, descriptor sizes, error cause
+  values, and small packed types.
+- `axi_lite_regs`: AXI4-Lite CSR block in the `cfg_clk` domain.
+- `cdc_toggle_sync`: two-flop toggle synchronizer with edge detection.
+- `cdc_pulse_sync`: event-pulse crossing wrapper built on toggle sync.
+- `cdc_bus_handshake`: coherent bus snapshot crossing for infrequent control
+  and status updates.
+- `outstanding_table`: small table used to validate AXI response IDs and
+  retire accepted transactions.
+- `dma_core`: DMA FSM, burst datapath, descriptor flow, 2D descriptor support,
+  response checks, status, and event pulses in the `dma_clk` domain.
+- `dma_top`: top-level integration between AXI4-Lite CSRs, CDC, DMA core,
+  AXI4 master interface, and IRQ output.
 
-- `axi_lite_regs` for AXI4-Lite CSRs, status, and IRQ latches in the
-  `cfg_clk` domain.
-- Explicit CDC pulse and bus bridges between the configuration and DMA domains.
-- `dma_core` for AXI4 memory-side reads and writes in the `dma_clk` domain.
-- `outstanding_table` instances for bounded read and write transaction
-  tracking.
-- `dma_top` to connect the CSR block, CDC bridges, and DMA core.
+Older modular RTL shells in `rtl/` are not part of the active implementation.
 
-The memory datapath is intentionally conservative: one AXI read burst is issued,
-the returned data is stored in a small internal burst buffer, and then one AXI
-write burst is issued. The outstanding tables track issued transactions and
-validate responses, but the datapath still does not issue arbitrary multiple
-outstanding bursts.
+## Control Path Overview
 
-## CSR Block
+Software programs CSRs over AXI4-Lite in `axi_lite_regs`. The key programming
+fields are:
 
-`axi_lite_regs` terminates a 32-bit AXI4-Lite slave interface and owns the
-software-visible registers.
+- `SRC_ADDR_LO/HI`
+- `DST_ADDR_LO/HI`
+- `LEN_BYTES`
+- `DESC_BASE_LO/HI`
+- `DESC_COUNT`
+- `MODE.descriptor_mode_enable`
+- `IRQ_ENABLE`
 
-Behavior:
+Writing one to `CTRL.start` creates a one-cycle `cfg_clk` pulse. `dma_top`
+captures the current programmed fields into a control snapshot and transfers
+that snapshot to `dma_clk` through `cdc_bus_handshake`. The destination side
+recreates a one-cycle `dma_start_pulse` for `dma_core`.
 
-- Accepts independent AXI-Lite address and data handshakes for writes.
-- Supports single outstanding read and write responses.
-- Applies byte strobes to writable data registers.
-- Treats `CTRL.start` and `CTRL.soft_reset` as write-one pulse fields.
-- Latches `STATUS.done` and `STATUS.error` from DMA core event pulses.
-- Implements write-one-to-clear behavior for `STATUS` and `IRQ_STATUS`.
-- Exposes descriptor configuration registers and DMA debug/error readback.
-- Raises `irq` when any enabled IRQ status bit is pending.
+Writing one to `CTRL.soft_reset` creates a separate pulse that crosses into
+`dma_clk` through `cdc_pulse_sync` and clears the DMA core state. Clearing
+`STATUS.error` or writing a nonzero value to `ERROR_CAUSE` creates an
+error-clear pulse that crosses to the DMA core and clears the latched cause.
 
-Unmapped AXI-Lite accesses return `SLVERR`. Writes to read-only registers are
-accepted and ignored.
+## Data Path Overview
 
-## Clock Domains and CDC
+The active datapath is intentionally conservative:
 
-`dma_top` exposes two independent active-low reset clock domains:
+1. Prepare the next transfer chunk.
+2. Issue one AXI read burst.
+3. Store all returned read beats in an internal `burst_buffer_q`.
+4. Issue one AXI write burst.
+5. Send buffered beats with full write strobes.
+6. Wait for the write response.
+7. Advance addresses and remaining byte count or finish.
 
-- `cfg_clk`/`cfg_rst_n`: AXI4-Lite CSRs, IRQ enable/status latches, and the
-  top-level `irq` output.
-- `dma_clk`/`dma_rst_n`: DMA control FSM, AXI4 master interface, descriptor
-  processing, burst buffer, and outstanding transaction tables.
+The core does not stream read data directly into writes and does not keep
+multiple arbitrary bursts in flight. The response tracking tables are used for
+validation and defensive bookkeeping around the currently issued stream.
 
-Crossings are explicit in RTL:
+## Register Block Behavior
 
-- `CTRL.start` captures the programmed source, destination, length, descriptor
-  base/count, and mode into a config-domain snapshot. A bus handshake transfers
-  that snapshot into `dma_clk` and recreates a one-cycle DMA-domain start pulse.
-- `CTRL.soft_reset` and `STATUS.error` clear pulses cross from `cfg_clk` to
-  `dma_clk` through pulse synchronizers.
-- DMA status and observability fields cross from `dma_clk` to `cfg_clk` through
-  a bus handshake that continuously publishes coherent snapshots.
-- DMA completion and error event pulses cross from `dma_clk` to `cfg_clk`
-  through pulse synchronizers before they update CSR status and IRQ latches.
+`axi_lite_regs` implements a 32-bit AXI4-Lite slave register file.
 
-There are no asynchronous FIFOs or pointer crossings in the current integrated
-datapath. CDC correctness is based on these small synchronizer and handshake
-blocks, not on timing constraints alone.
+Important behavior:
 
-## Burst Transfer Flow
+- Independent AW and W handshakes are accepted and buffered until both halves
+  of a write are present.
+- One write response is produced for each accepted write.
+- One read response is produced for each accepted read.
+- Writable data registers honor byte strobes.
+- `CTRL` reads as zero; bits are write-one pulse fields.
+- `STATUS.done` and `STATUS.error` are sticky W1C bits.
+- `IRQ_STATUS` bits are sticky W1C bits.
+- `IRQ_ENABLE` gates only the top-level `irq`; it does not prevent
+  `IRQ_STATUS` from latching events.
+- Unmapped reads and writes return `SLVERR`.
+- Writes to read-only mapped registers are accepted and ignored.
 
-Single-shot mode uses `SRC_ADDR`, `DST_ADDR`, and `LEN_BYTES`. Descriptor mode
-uses the same transfer engine after a descriptor has been fetched and decoded.
+The full register map is in `docs/register_map.md`.
 
-For each transfer:
+## Descriptor Flow
 
-1. Validate nonzero length, data-width-aligned addresses, and data-width-aligned
-   byte count.
-2. Choose the next burst length from the remaining byte count, the configured
-   `MAX_BURST_BEATS`, and the source/destination 4KB boundary limits.
-3. Issue an AXI read burst with `ARLEN = beats - 1`, `ARSIZE` matching the data
-   width, and `ARBURST = INCR`.
-4. Capture all returned read beats into the internal burst buffer.
-5. Issue an AXI write burst with matching `AWLEN`, `AWSIZE`, and `AWBURST`.
-6. Write the buffered beats with full write strobes.
-7. Check `RRESP`, `RLAST`, and `BRESP`; stop with error on a failed response or
-   unexpected read burst length.
-8. Advance source/destination pointers and repeat until the transfer completes.
-
-The default maximum burst length is 16 beats. The implementation supports final
-short bursts as long as the transfer length remains aligned to the data width.
-
-## 4KB Boundary Handling
-
-The core does not allow a burst to cross a 4KB address boundary. Burst length is
-limited by both the source address and destination address boundary distance, so
-a transfer can be split earlier than `MAX_BURST_BEATS` when either side is near
-a 4KB page boundary.
-
-This is still a simple aligned-transfer implementation. It does not support
-unaligned accesses, narrow transfers, or data width conversion.
-
-## Outstanding Tracking
-
-The DMA core instantiates separate bounded tables for read-channel and
-write-channel tracking. Each table records the AXI ID, transaction type,
-descriptor index, and expected beat count when an address handshake completes.
-Read entries are looked up on accepted `R` beats and retired on the final read
-beat. Write entries are looked up and retired on accepted `B` responses.
-
-The default table depth is four entries. The integrated core currently drives a
-single AXI ID value of zero and uses an in-order read-buffer-write datapath, so
-the active design reaches at most one read entry and one write entry at a time.
-The table depth is therefore a defensive bound and response-validation
-structure, not a license for arbitrary parallel AXI issuing. Address valid
-signals are gated by table availability, and an unexpected response ID or failed
-retire reports `ERROR_CAUSE_OUTSTANDING_TABLE`.
-
-## Descriptor Mode
-
-Descriptor mode is enabled by setting `MODE.descriptor_mode_enable`, programming
+Descriptor mode is selected by setting `MODE.descriptor_mode_enable`, writing
 `DESC_BASE` and `DESC_COUNT`, then writing `CTRL.start`.
 
-Linear descriptor processing:
+Linear descriptor flow:
 
-1. Validate `DESC_COUNT` is nonzero and `DESC_BASE` is 32-byte aligned.
-2. Fetch one 32-byte descriptor with an 8-beat 32-bit AXI read burst.
-3. Check the descriptor valid bit and transfer fields.
-4. Run the transfer using the same burst copy engine as single-shot mode.
-5. Write one 32-bit descriptor status word at descriptor offset `0x18`.
-6. Advance to the next descriptor until `DESC_COUNT` descriptors complete, a
-   descriptor has `stop_after` set, or an error occurs.
+1. Validate that `DESC_COUNT` is nonzero.
+2. Validate that `DESC_BASE` is 32-byte aligned.
+3. Fetch one 32-byte descriptor with an 8-beat 32-bit AXI read burst.
+4. Decode source address, destination address, length, and control fields.
+5. Validate descriptor valid bit, mode field, alignment, and length.
+6. Run the normal burst copy datapath.
+7. Write one 32-bit descriptor status word at descriptor offset `0x18`.
+8. Continue until the configured count completes or `stop_after` is set.
 
-Descriptor mode currently assumes the integrated 32-bit DMA data width. If the
-core is parameterized to another data width and descriptor mode is started, the
-core reports `ERROR_CAUSE_DESC_BUS_UNSUPPORTED`.
+2D descriptor flow:
 
-## 2D Strided Descriptor Mode
+1. Fetch the base 32-byte descriptor.
+2. Detect `CONTROL[7:4] == 1`.
+3. Fetch the 32-byte extension at descriptor offset `0x20`.
+4. Validate `row_bytes`, `num_rows`, source stride, and destination stride.
+5. Run each row through the same burst copy datapath.
+6. Write one descriptor status word after the whole tile completes.
 
-Phase 8.5 adds a layout-aware tiled mode for accelerator-style row-strided
-copies. A 2D descriptor describes a whole tile:
-
-```text
-for row in 0..num_rows-1:
-  copy row_bytes from src_base + row * src_stride_bytes
-                 to dst_base + row * dst_stride_bytes
-```
-
-The core preserves the existing burst datapath. It fetches the base 32-byte
-descriptor, detects `CONTROL[7:4] == 1`, fetches an additional 32-byte extension
-at `descriptor + 0x20`, validates the tile fields, then runs each row through
-the same burst transfer flow used by linear descriptors.
-
-Row address generation is registered. The core latches row 0 source/destination
-addresses, row byte count, row count, and strides. After each row completes and
-the row's write response has returned successfully, the core increments running
-row-base address registers by the source and destination strides. The next row
-starts from those registered row-base addresses.
-
-Descriptor retirement remains ordered. The core writes one descriptor status
-word for the entire 2D descriptor after all rows complete, not one status word
-per row. If any row sees an AXI read/write error or if descriptor validation
-fails, processing stops on the first error and the existing descriptor error
-status path is used.
+Descriptor mode currently assumes `DATA_WIDTH == 32`. Starting descriptor mode
+with another data width reports `ERROR_CAUSE_DESC_BUS_UNSUPPORTED`.
 
 ## Descriptor Format
 
@@ -174,137 +120,205 @@ Linear descriptors are 32 bytes and must be 32-byte aligned.
 | `0x04` | `SRC_ADDR_HI` | Source address bits `[63:32]`. |
 | `0x08` | `DST_ADDR_LO` | Destination address bits `[31:0]`. |
 | `0x0c` | `DST_ADDR_HI` | Destination address bits `[63:32]`. |
-| `0x10` | `LEN_BYTES` | Transfer length in bytes. Must be nonzero and data-width aligned. |
-| `0x14` | `CONTROL` | Descriptor control bits. |
-| `0x18` | `STATUS` | Descriptor status written by hardware. |
-| `0x1c` | `NEXT_OR_RESERVED` | Reserved in this phase. |
+| `0x10` | `LEN_BYTES` | Linear transfer length or 2D row byte count. |
+| `0x14` | `CONTROL` | Valid, stop, and descriptor mode bits. |
+| `0x18` | `STATUS` | Hardware-written descriptor status word. |
+| `0x1c` | `RESERVED` | Reserved in this baseline. |
 
-### Descriptor `CONTROL`
+`CONTROL[0]` is the valid bit. `CONTROL[2]` is `stop_after`.
+`CONTROL[7:4]` is the descriptor mode: `0` for linear and `1` for 2D.
 
-| Bit | Name | Description |
-| --- | --- | --- |
-| `0` | `valid` | Must be set for the descriptor to run. |
-| `1` | `irq_on_done` | Accepted as part of the descriptor format but ignored in this phase; descriptor interrupts are controlled globally by `IRQ_ENABLE`. |
-| `2` | `stop_after` | Stop descriptor processing after this descriptor completes successfully. |
-| `7:4` | `descriptor_mode` | `0`: linear descriptor. `1`: 2D strided descriptor with a 32-byte extension. |
-| `31:8` | `reserved` | Ignored. |
-
-### 2D Descriptor Extension
-
-A 2D descriptor uses the same first 32 bytes as the linear descriptor. The
-linear `LEN_BYTES` field becomes `row_bytes`, and `CONTROL[7:4]` must be `1`.
-The descriptor status word is still written at offset `0x18`. The 2D extension
-starts at offset `0x20`, making the total descriptor footprint 64 bytes.
+A 2D descriptor adds this 32-byte extension:
 
 | Offset | Field | Description |
 | --- | --- | --- |
-| `0x20` | `NUM_ROWS` | Number of rows to copy. Must be nonzero. |
-| `0x24` | `SRC_STRIDE_BYTES` | Byte distance between source rows. Must be data-width aligned and at least `row_bytes`. |
-| `0x28` | `DST_STRIDE_BYTES` | Byte distance between destination rows. Must be data-width aligned and at least `row_bytes`. |
-| `0x2c` | `TILE_FLAGS_OR_RESERVED` | Reserved in this phase. |
-| `0x30`-`0x3c` | `RESERVED` | Reserved in this phase. |
+| `0x20` | `NUM_ROWS` | Number of rows. Must be nonzero. |
+| `0x24` | `SRC_STRIDE_BYTES` | Source stride. Must be aligned and at least `row_bytes`. |
+| `0x28` | `DST_STRIDE_BYTES` | Destination stride. Must be aligned and at least `row_bytes`. |
+| `0x2c`-`0x3c` | `RESERVED` | Reserved in this baseline. |
 
-### Descriptor `STATUS`
+Descriptor status bit `0` means done, bit `1` means error, and bits `[15:8]`
+hold the low eight bits of `ERROR_CAUSE` when error is set.
 
-| Bit | Name | Description |
-| --- | --- | --- |
-| `0` | `done` | Set when the descriptor transfer completes successfully. |
-| `1` | `error` | Set when descriptor validation or transfer execution fails. |
-| `2` | `in_progress` | Not implemented in this phase. |
-| `15:8` | `error_code` | Low 8 bits of `ERROR_CAUSE` when `error` is set. |
-| `31:16` | `reserved` | Written as zero. |
+## AXI4-Lite Control Interface
 
-## Error Handling
+The AXI4-Lite interface lives entirely in `cfg_clk`. The implementation accepts
+one buffered write address, one buffered write data beat, one write response,
+and one read response at a time. It is suitable for simple CSR programming and
+the current cocotb tests, but it is not presented as a fully stressed
+commercial AXI-Lite subsystem.
 
-The core stops on the first error. In single-shot mode it pulses global error
-status immediately. In descriptor mode it writes descriptor error status when a
-descriptor has been fetched and status writeback is possible, then pulses global
-error status.
+## AXI4 Master Read/Write Behavior
 
-`ERROR_CAUSE` records the reason for the most recent error. It is cleared by
-clearing `STATUS.error`, writing a nonzero value to `ERROR_CAUSE`, issuing
-`CTRL.soft_reset`, or starting a new valid operation.
+The AXI4 master interface lives entirely in `dma_clk`.
 
-Descriptor status writeback errors are reported as
-`ERROR_CAUSE_DESC_WRITEBACK`. If descriptor status writeback itself fails, the
-descriptor status word in memory may not reflect the error, but global
-`STATUS.error`, `IRQ_STATUS.error_irq`, and `ERROR_CAUSE` are still updated.
+Read behavior:
 
-## Interrupts
+- `ARID` is always zero.
+- `ARSIZE` matches the configured data width.
+- `ARBURST` is INCR.
+- `ARLEN` is `burst_beats - 1`.
+- Descriptor fetches use 8 beats at the default 32-bit data width.
+- `RRESP` and `RLAST` are checked.
 
-The CSR block tracks four interrupt status bits:
+Write behavior:
 
-- single-shot done
-- error
-- descriptor done
-- descriptor list done
+- `AWID` is always zero.
+- `AWSIZE` matches the configured data width.
+- `AWBURST` is INCR.
+- `AWLEN` is `burst_beats - 1` for data writes.
+- Descriptor status writes are one beat.
+- Data writes use full write strobes.
+- Descriptor status writes strobe only the low status word bytes.
+- `BRESP` is checked.
 
-`IRQ_STATUS` latches events regardless of the enable mask. `IRQ_ENABLE` only
-controls whether a pending bit contributes to the top-level `irq` output:
-`irq = |(IRQ_STATUS & IRQ_ENABLE)`. Software clears each pending bit by writing
-one to the corresponding `IRQ_STATUS` bit. Clearing `STATUS.error` clears
-`ERROR_CAUSE`, but it does not clear `IRQ_STATUS.error_irq`; software should
-clear both when it has handled an error interrupt.
+## Boundary Handling
 
-Descriptor mode pulses `descriptor_done_irq` after each successful descriptor
-status writeback and pulses `descriptor_list_done_irq` when processing stops
-successfully because `DESC_COUNT` descriptors completed or `stop_after` was set.
-For a one-descriptor list, both descriptor interrupt bits are latched.
+`dma_core` limits each data burst by:
 
-## Observability
+- remaining transfer bytes,
+- `MAX_BURST_BEATS`, and
+- the source and destination distance to the next 4KB boundary.
 
-The design exposes a small set of read-only progress registers:
+This prevents generated bursts from crossing a 4KB boundary on either the
+source read side or the destination write side. The design still requires
+aligned addresses and aligned byte counts.
 
-- `DESC_INDEX`: current descriptor index, retaining the last processed index.
-- `BYTES_REMAINING`: byte count remaining in the active transfer.
-- `ACTIVE_SRC_LO`: active source address low 32 bits.
-- `ACTIVE_DST_LO`: active destination address low 32 bits.
-- `COMPLETED_DESC_COUNT`: descriptors completed in the current descriptor run.
-- `COMPLETED_BYTE_COUNT_LO`: low 32 bits of bytes completed in the current run.
+## Outstanding Transaction Behavior
 
-These registers are intended for basic software visibility and tests. They are
-not a performance counter subsystem and reset at the start of each operation.
+Separate read and write `outstanding_table` instances record accepted address
+transactions. The tables store the AXI ID, transaction type, descriptor index,
+and expected beat count.
+
+The active core drives a single AXI ID of zero and issues a read-buffer-write
+stream, so it normally reaches at most one read entry and one write entry. The
+tables are still useful for detecting unexpected response IDs or retire errors.
+They should not be interpreted as support for arbitrary multi-outstanding AXI
+traffic.
+
+## Interrupt Behavior
+
+`IRQ_STATUS` has four pending bits:
+
+- single-shot done,
+- error,
+- descriptor done,
+- descriptor list done.
+
+Events latch pending bits even when masked. `IRQ_ENABLE` controls whether a
+pending bit contributes to `irq = |(IRQ_STATUS & IRQ_ENABLE)`.
+
+Clearing `STATUS.error` clears the DMA error cause, but it does not clear
+`IRQ_STATUS.error_irq`. Software should clear both when handling an error.
 
 ## Reset Behavior
 
-`cfg_rst_n` clears the CSR register file, status latches, IRQ enable and
-pending bits, and config-domain CDC state. `dma_rst_n` clears the DMA FSM,
-outstanding tables, descriptor progress, AXI master state, and DMA-domain
-observability counters. `CTRL.soft_reset` crosses into the DMA domain, resets
-the DMA core state, and clears `ERROR_CAUSE`; it does not rewrite the
-programmed CSR source, destination, length, descriptor, mode, or interrupt
-enable registers.
+`cfg_rst_n` resets:
+
+- CSR storage,
+- AXI-Lite response state,
+- sticky status and IRQ bits,
+- config-domain CDC state.
+
+`dma_rst_n` resets:
+
+- DMA FSM state,
+- burst buffer and beat counters,
+- descriptor progress,
+- outstanding tables,
+- status/observability values,
+- DMA-domain CDC state.
+
+`CTRL.soft_reset` resets the DMA core control state and clears `ERROR_CAUSE`.
+It does not rewrite the programmed CSR fields or interrupt enables.
+
+The top-level resets are separate. Full-chip integration should either assert
+both together or deliberately verify partial-domain reset behavior.
+
+## Backpressure Behavior
+
+AXI-Lite:
+
+- The register block can buffer independent AW and W halves.
+- It accepts a new write address/data only when not holding an unresolved
+  response for that channel.
+- It accepts a new read only when no read response is pending.
+
+AXI4 master:
+
+- Address valid signals are gated by the matching outstanding table being
+  ready.
+- The read-data state waits on `RVALID`.
+- The write-data state waits on `WREADY` for each beat.
+- The write-response state waits on `BVALID`.
+- Stalls preserve the current state and beat counters.
+
+## Important FSMs
+
+`dma_core` has one main FSM:
+
+- `ST_IDLE`: waits for a valid start.
+- `ST_XFER_PREP`: computes burst length and initializes beat counters.
+- `ST_XFER_AR`: issues a read address.
+- `ST_XFER_R`: captures read data and checks response/last behavior.
+- `ST_XFER_AW`: issues a write address.
+- `ST_XFER_W`: sends buffered write data.
+- `ST_XFER_B`: checks write response and advances or completes.
+- `ST_DESC_FETCH_AR`: issues descriptor base fetch.
+- `ST_DESC_FETCH_R`: captures descriptor words.
+- `ST_DESC_CHECK`: validates base descriptor fields.
+- `ST_DESC_EXT_AR`: issues 2D extension fetch.
+- `ST_DESC_EXT_R`: captures extension words.
+- `ST_TILE_CHECK`: validates 2D fields and initializes row state.
+- `ST_DESC_STATUS_AW`: issues descriptor status write address.
+- `ST_DESC_STATUS_W`: sends descriptor status word.
+- `ST_DESC_STATUS_B`: checks descriptor status write response and advances,
+  completes, or errors.
+
+## Key Signals
+
+- `start_i`: one-cycle DMA-domain operation launch pulse.
+- `soft_reset_i`: one-cycle DMA-domain reset pulse from software.
+- `error_clear_i`: one-cycle DMA-domain error-cause clear pulse.
+- `desc_mode_i`: selects descriptor flow instead of direct CSR transfer.
+- `busy_o`: high whenever the DMA FSM is not idle.
+- `done_pulse_o`: generic successful-operation pulse.
+- `single_done_pulse_o`: successful single-shot pulse.
+- `desc_done_pulse_o`: successful descriptor status writeback pulse.
+- `desc_list_done_pulse_o`: successful end-of-descriptor-list pulse.
+- `error_pulse_o`: failing-operation pulse.
+- `desc_active_o`: descriptor mode is active and the core is not idle.
+- `error_cause_o`: current latched error cause.
+- `bytes_remaining_o`: current transfer or row bytes remaining.
+- `completed_desc_count_o`: descriptors completed in the current run.
+- `completed_byte_count_lo_o`: low 32 bits of completed bytes in the current
+  run.
 
 ## Limitations
 
 Implemented:
 
 - AXI4-Lite CSR access.
-- Single-shot memory-to-memory copies.
-- AXI INCR burst transfers with final short bursts.
+- Aligned single-shot memory-to-memory copies.
+- AXI INCR bursts with final short bursts.
 - 4KB burst boundary splitting.
 - Linear descriptor-count mode.
-- 2D strided/tiled descriptor mode with 64-byte descriptors.
+- 2D strided descriptor mode.
 - Descriptor status writeback.
-- Bounded outstanding transaction tables for read and write response tracking.
-- Separate config and DMA clock domains with explicit control/status/event CDC.
-- Four software-visible IRQ status bits with write-one-to-clear behavior.
-- Basic progress observability registers.
+- Basic IRQ status and enable behavior.
+- Bounded response tracking.
+- Explicit top-level CDC.
 
 Not implemented:
 
-- Arbitrary multi-outstanding AXI reads or writes.
+- Descriptor rings or linked-list scatter-gather.
+- Arbitrary multi-outstanding AXI issuing.
 - Out-of-order response support.
-- Linked-list scatter-gather descriptors.
-- Circular descriptor rings.
 - Completion queues.
 - Interrupt coalescing or multiple interrupt lines.
-- Transpose, compression, sparse gather/scatter, cache coherence, QoS, or
-  AXI4-Stream operation.
-- Negative strides or overlapping-row support.
-- Unaligned transfers.
-- Narrow transfers or data width conversion.
+- Unaligned transfers, narrow transfers, or data-width conversion.
 - Formal or tool-based CDC signoff.
 - ASIC implementation flow.
 
-The design is not claimed to be production-ready or fully AXI feature-complete.
+This design is not production-ready and is not claimed to be fully AXI
+feature-complete.

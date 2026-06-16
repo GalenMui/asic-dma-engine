@@ -38,11 +38,9 @@ module axi_lite_slave #(
   input  logic [1:0]              reg_rsp_resp
 );
 
-  // This block will eventually bridge AXI4-Lite software accesses onto the
-  // internal register request/response channel consumed by dma_regs.
-  // TODO: Handle AW and W independently, buffer them as needed, and only emit
-  // a write request once both halves of the transaction are available.
-  // TODO: Support backpressure cleanly on read and write responses.
+  // Inactive scaffold from an earlier modular register-block direction. The
+  // active build uses axi_lite_regs.sv; see docs/repo_audit.md before
+  // extending this shell.
 
   always_comb begin
     s_axil_awready = 1'b0;

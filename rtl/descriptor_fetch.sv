@@ -25,10 +25,8 @@ module descriptor_fetch #(
 
   import dma_pkg::*;
 
-  // Future role: issue descriptor fetch reads, collect returned words, and
-  // emit a decoded descriptor-sized record into the execution pipeline.
-  // TODO: Support ring wrap handling and descriptor fetch retries if needed.
-  // TODO: Track read response errors and surface them as descriptor faults.
+  // Inactive scaffold from an earlier modular descriptor pipeline. The active
+  // descriptor fetch path is integrated in dma_core.sv.
 
   always_comb begin
     fetch_req_ready = 1'b0;

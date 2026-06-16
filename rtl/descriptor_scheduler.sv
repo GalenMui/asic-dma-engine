@@ -16,10 +16,8 @@ module descriptor_scheduler (
 
   import dma_pkg::*;
 
-  // Future role: sequence descriptor execution, manage flow control, and
-  // decide when reads, writes, and completion operations can be issued.
-  // TODO: Coordinate with FIFO depth, completion queue space, and outstanding
-  // transaction limits before dispatching work.
+  // Inactive scaffold from an earlier modular descriptor pipeline. The active
+  // sequencing behavior is integrated in dma_core.sv.
 
   always_comb begin
     cmd_in_ready    = 1'b0;

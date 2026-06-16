@@ -2,7 +2,7 @@
 
 module dma_assertions;
 
-  // TODO: Add protocol and microarchitectural assertions for AXI4-Lite, AXI4,
-  // FIFO safety, outstanding tracking consistency, and completion sequencing.
+  // Inactive assertion scaffold. Suggested assertions are tracked in
+  // docs/verification_plan.md.
 
 endmodule

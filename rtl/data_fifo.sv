@@ -16,9 +16,8 @@ module data_fifo #(
   output logic                  empty
 );
 
-  // Placeholder FIFO shell. Real storage, occupancy tracking, and backpressure
-  // handling will land in a later phase once the datapath behavior is defined.
-  // TODO: Add assertions for no overflow, no underflow, and ordering.
+  // Inactive FIFO shell from an earlier split datapath. The active design uses
+  // a small internal burst buffer in dma_core.sv instead of this FIFO.
 
   always_comb begin
     push_ready = 1'b0;

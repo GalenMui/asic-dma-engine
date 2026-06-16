@@ -9,7 +9,7 @@ Goal: build a credible RTL portfolio project with AXI4-Lite CSRs, AXI4 memory-si
 Current focus: implement only the phase explicitly requested. Do not implement future phases early.
 
 For the full roadmap, see:
-- `docs/project_plan.md`
+- `docs/implementation_plan.md`
 - `docs/register_map.md`
 - `docs/architecture.md`
 
@@ -25,7 +25,7 @@ Keep changes simple:
 - Minimum code that solves the task.
 - No speculative features.
 - No abstractions for single-use code.
-- No descriptor rings, bursts, outstanding transactions, UVM, vendor IP, or OpenLane flow unless explicitly requested.
+- No descriptor rings, arbitrary new burst modes, arbitrary multi-outstanding transaction policy, UVM, vendor IP, or OpenLane flow unless explicitly requested.
 
 Make surgical edits:
 - Touch only files required by the task.

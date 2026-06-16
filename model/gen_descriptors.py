@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Placeholder descriptor generator for future directed and random testing."""
+"""Scaffold descriptor generator for future directed and random testing."""
 
 import argparse
 
@@ -9,8 +9,7 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=1, help="descriptor count")
     args = parser.parse_args()
 
-    # TODO: Emit descriptor ring images and matching expected-completion data.
-    print(f"Descriptor generation placeholder: count={args.count}")
+    print(f"Descriptor generation scaffold: count={args.count}")
 
 
 if __name__ == "__main__":

@@ -12,9 +12,8 @@ module interrupt_controller (
   output logic [2:0] irq_status
 );
 
-  // This shell currently provides a simple combinational view of incoming
-  // events. Real sticky pending bits and clear-on-write behavior come later.
-  // TODO: Wire IRQ_ENABLE and IRQ_STATUS from the register block.
+  // Inactive scaffold from an earlier interrupt-controller direction. The
+  // active sticky pending bits and IRQ enable behavior live in axi_lite_regs.sv.
 
   always_comb begin
     irq_status = {queue_event, error_event, completion_event};

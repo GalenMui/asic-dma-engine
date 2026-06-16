@@ -54,11 +54,8 @@ module dma_regs #(
   localparam logic [REG_ADDR_WIDTH-1:0] PERF_READ_BEATS     = 'h0048;
   localparam logic [REG_ADDR_WIDTH-1:0] PERF_WRITE_BEATS    = 'h004c;
 
-  // TODO: Partition software-owned versus hardware-owned fields explicitly.
-  // TODO: Define clear-on-write and write-1-to-clear behavior for status bits.
-  // TODO: Document cfg_clk-to-dma_clk crossings for control/status mirrors.
-  // TODO: Add performance counters once event sources and rollover behavior are
-  // settled.
+  // Inactive scaffold from an earlier descriptor-ring register map. The active
+  // build uses axi_lite_regs.sv and the register map in docs/register_map.md.
 
   always_comb begin
     reg_req_ready     = 1'b0;

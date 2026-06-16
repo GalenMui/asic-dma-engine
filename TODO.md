@@ -1,58 +1,56 @@
-# TODO
+# Backlog
 
-## Phase 0
+Use this file as the central project backlog. Inline TODO markers were removed
+from inactive scaffolds during the lock-down pass so future work is tracked in
+one place.
 
-- Review scaffolded module boundaries and naming.
-- Decide default address width, data width, and register field encodings.
-- Refine placeholder build, lint, and simulation flow for the preferred tools.
+## Immediate Owner Verification
 
-## Phase 1
+- Install the cocotb toolchain and run `make test`.
+- Review `docs/register_map.md` against `rtl/axi_lite_regs.sv`.
+- Review `docs/architecture.md` against `rtl/dma_top.sv` and
+  `rtl/dma_core.sv`.
+- Add directed tests for unsupported descriptor modes and all 2D validation
+  error causes.
+- Add tests for unexpected AXI response IDs and outstanding-table retire
+  errors.
+- Add reset tests for each major DMA FSM state.
+- Add CDC tests with varied `cfg_clk` and `dma_clk` ratios.
 
-- Implement a register-programmed DMA MVP with a simplified internal memory interface.
-- Add basic control/status register behavior and a minimal datapath.
-- Create a directed smoke test and extend the Python model accordingly.
+## RTL Review Before New Features
 
-## Phase 2
+- Decide whether inactive modular RTL shells should be deleted, revived, or
+  archived after manual review.
+- Review AXI-Lite AW/W buffering and response backpressure behavior under more
+  timing combinations.
+- Review descriptor status writeback behavior on injected writeback failures.
+- Review partial-domain reset behavior.
+- Review whether current observability registers are sufficient for debugging.
 
-- Implement FIFO storage and backpressure behavior.
-- Add FIFO safety assertions.
+## Verification Infrastructure
 
-## Phase 3
+- Decide whether to keep verification primarily in cocotb or revive the
+  SystemVerilog testbench scaffolding.
+- Build a real Python reference model only if it will be used by tests.
+- Add assertions for AXI handshakes, burst lengths, no 4KB crossing, WLAST, and
+  outstanding-table consistency.
+- Add functional coverage for register access, burst sizes, descriptor types,
+  error causes, IRQ states, and reset states.
 
-- Implement real AXI4-Lite handshake and register access behavior.
-- Add AXI4-Lite driver tasks and protocol assertions.
+## ASIC Preparation
 
-## Phase 4
+- Treat `constraints/dma.sdc` as a starting assumption file, not signoff.
+- Add synchronizer attributes or CDC waiver strategy only after CDC review.
+- Define realistic clocks, IO delays, reset assumptions, and false paths.
+- Create OpenLane/OpenROAD flow collateral only after RTL and verification
+  confidence improves.
 
-- Implement descriptor ring fetch, decode, and scheduling.
-- Define descriptor ownership and ring wrap behavior.
+## Deliberately Out Of Scope For This Baseline
 
-## Phase 5
-
-- Implement completion queue formatting, writeback, and head/tail rules.
-- Add completion and interrupt tests.
-
-## Phase 6
-
-- Implement constrained AXI4 master read/write burst generation.
-- Add `RRESP`/`BRESP` error handling and `RLAST`/`WLAST` checks.
-
-## Phase 7
-
-- Implement outstanding transaction tracking and matching.
-- Stress multiple in-flight transactions in randomized verification.
-
-## Phase 8
-
-- Add cfg/dma CDC paths and synchronize software-visible control/status events.
-- Constrain and verify cross-domain behavior.
-
-## Phase 9
-
-- Refine SDC constraints and synthesis scripts.
-- Start ASIC-oriented lint, timing, and area closure work.
-
-## Phase 10
-
-- Add place-and-route collateral and flow configuration.
-- Perform PPA study and document tradeoffs.
+- Descriptor rings or linked-list scatter-gather.
+- Completion queues.
+- Arbitrary multi-outstanding AXI issue.
+- Out-of-order response support.
+- Unaligned transfers and data-width conversion.
+- AXI4-Stream, cache coherence, QoS, compression, sparse gather/scatter, or
+  transpose modes.

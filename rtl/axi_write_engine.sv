@@ -41,11 +41,8 @@ module axi_write_engine #(
 
   localparam logic [2:0] AXI_SIZE_BYTES = $clog2(DATA_WIDTH / 8);
 
-  // Future role: consume buffered data, emit aligned full-width writes, and
-  // retire commands only after BRESP is accepted.
-  // TODO: Generate WLAST correctly for each burst.
-  // TODO: Handle BRESP errors and coordinate with the outstanding table.
-  // TODO: Add arbitration for completion queue writes versus data path writes.
+  // Inactive scaffold from an earlier split datapath. The active AXI write
+  // behavior is integrated in dma_core.sv.
 
   always_comb begin
     cmd_ready        = 1'b0;
