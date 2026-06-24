@@ -49,6 +49,7 @@ module outstanding_table #(
   logic [COUNT_WIDTH-1:0]     valid_count;
 
   always_comb begin
+    // scan once for a free slot, duplicate ids, lookups, and retire matches
     match_alloc_id = '0;
     alloc_index = '0;
     lookup_index = '0;
@@ -68,7 +69,7 @@ module outstanding_table #(
 
       if (!valid_q[idx] && !alloc_found_empty) begin
         alloc_found_empty = 1'b1;
-        alloc_index = idx[IDX_WIDTH-1:0];
+        alloc_index = idx[IDX_WIDTH-1:0]; // first free slot wins
       end
 
       if (valid_q[idx] && (axi_id_q[idx] == alloc_axi_id)) begin
@@ -77,7 +78,7 @@ module outstanding_table #(
 
       if (valid_q[idx] && (axi_id_q[idx] == lookup_id) && !lookup_found) begin
         lookup_found = 1'b1;
-        lookup_index = idx[IDX_WIDTH-1:0];
+        lookup_index = idx[IDX_WIDTH-1:0]; // ids should be unique, still take the first match
       end
 
       if (valid_q[idx] && (axi_id_q[idx] == retire_id) && !retire_found) begin
@@ -87,12 +88,13 @@ module outstanding_table #(
     end
 
     if (lookup_found) begin
+      // return the saved context so the response can be checked and retired
       lookup_txn_type = txn_type_q[lookup_index];
       lookup_desc_id = desc_id_q[lookup_index];
       lookup_expected_beats = expected_beats_q[lookup_index];
     end
 
-    alloc_ready = alloc_found_empty && !(|match_alloc_id);
+    alloc_ready = alloc_found_empty && !(|match_alloc_id); // no room or reused id means no alloc
     lookup_hit = lookup_valid && lookup_found;
     full = (valid_count == COUNT_WIDTH'(DEPTH));
     empty = (valid_count == '0);
@@ -120,6 +122,7 @@ module outstanding_table #(
       end
     end else begin
       if (retire_valid && retire_found) begin
+        // clear the whole entry so stale context is easy to spot in a waveform
         valid_q[retire_index] <= 1'b0;
         axi_id_q[retire_index] <= '0;
         txn_type_q[retire_index] <= '0;
@@ -128,6 +131,7 @@ module outstanding_table #(
       end
 
       if (alloc_valid && alloc_ready) begin
+        // allocation fills the first empty slot found by the combinational scan
         valid_q[alloc_index] <= 1'b1;
         axi_id_q[alloc_index] <= alloc_axi_id;
         txn_type_q[alloc_index] <= alloc_txn_type;

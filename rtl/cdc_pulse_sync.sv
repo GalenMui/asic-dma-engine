@@ -9,8 +9,7 @@ module cdc_pulse_sync (
   output logic dst_pulse
 );
 
-  // Convert a source-domain pulse into a toggle, then recreate a single-cycle
-  // pulse in the destination domain.
+  // stretch the meaning of a pulse into a toggle so a slower clock cannot miss it
 
   logic src_toggle;
   logic dst_toggle;
@@ -19,10 +18,11 @@ module cdc_pulse_sync (
     if (!src_rst_n) begin
       src_toggle <= 1'b0;
     end else if (src_pulse) begin
-      src_toggle <= ~src_toggle;
+      src_toggle <= ~src_toggle; // every source pulse becomes one visible state change
     end
   end
 
+  // the shared toggle helper handles the synchronizer and destination edge detect
   cdc_toggle_sync u_cdc_toggle_sync (
     .src_clk    (src_clk),
     .src_rst_n  (src_rst_n),

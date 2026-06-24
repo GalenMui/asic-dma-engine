@@ -3,6 +3,7 @@
 
 
 def main() -> None:
+    # placeholder entry point for eventually coordinating seeds and model checks
     print("Random test orchestration scaffold")
 
 

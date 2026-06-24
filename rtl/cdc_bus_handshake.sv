@@ -25,7 +25,7 @@ module cdc_bus_handshake #(
   logic             src_ack_toggle;
   logic             src_ack_pulse;
 
-  assign src_ready = !src_busy_q;
+  assign src_ready = !src_busy_q; // only one snapshot can be crossing at a time
   assign dst_valid_pulse = dst_req_pulse;
   assign dst_data = dst_data_q;
 
@@ -36,17 +36,18 @@ module cdc_bus_handshake #(
       src_data_q       <= '0;
     end else begin
       if (src_ack_pulse) begin
-        src_busy_q <= 1'b0;
+        src_busy_q <= 1'b0; // destination has copied the held data, source can move on
       end
 
       if (src_valid && !src_busy_q) begin
-        src_data_q       <= src_data;
+        src_data_q       <= src_data; // freeze the bus while the request crosses over
         src_req_toggle_q <= ~src_req_toggle_q;
         src_busy_q       <= 1'b1;
       end
     end
   end
 
+  // request toggle goes forward and comes back as a one-cycle destination pulse
   cdc_toggle_sync u_req_sync (
     .src_clk    (src_clk),
     .src_rst_n  (src_rst_n),
@@ -62,11 +63,12 @@ module cdc_bus_handshake #(
       dst_data_q       <= '0;
       dst_ack_toggle_q <= 1'b0;
     end else if (dst_req_pulse) begin
-      dst_data_q       <= src_data_q;
+      dst_data_q       <= src_data_q; // source has kept this stable since raising request
       dst_ack_toggle_q <= ~dst_ack_toggle_q;
     end
   end
 
+  // acknowledgement releases the source-side snapshot for the next transfer
   cdc_toggle_sync u_ack_sync (
     .src_clk    (dst_clk),
     .src_rst_n  (dst_rst_n),

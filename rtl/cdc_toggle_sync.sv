@@ -10,8 +10,7 @@ module cdc_toggle_sync (
   output logic dst_pulse
 );
 
-  // Move infrequent state changes from one clock domain into another by
-  // synchronizing a toggle and edge-detecting it at the sink.
+  // move an infrequent event across clocks as a level, then spot the change
 
   logic sync_ff1;
   logic sync_ff2;
@@ -23,13 +22,13 @@ module cdc_toggle_sync (
       sync_ff2  <= 1'b0;
       sync_ff2_d <= 1'b0;
     end else begin
-      sync_ff1  <= src_toggle;
-      sync_ff2  <= sync_ff1;
-      sync_ff2_d <= sync_ff2;
+      sync_ff1   <= src_toggle; // first flop can take the metastability hit
+      sync_ff2   <= sync_ff1;   // second flop is the clean destination copy
+      sync_ff2_d <= sync_ff2;   // delayed copy lets us turn the change into a pulse
     end
   end
 
   assign dst_toggle = sync_ff2;
-  assign dst_pulse  = sync_ff2 ^ sync_ff2_d;
+  assign dst_pulse  = sync_ff2 ^ sync_ff2_d; // high for one dst clock on either toggle edge
 
 endmodule

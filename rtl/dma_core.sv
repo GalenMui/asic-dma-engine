@@ -69,6 +69,7 @@ module dma_core #(
 
   import dma_pkg::*;
 
+  // the current datapath moves whole bus words, partial words are rejected up front
   localparam int STRB_WIDTH = DATA_WIDTH / 8;
   localparam int DATA_BYTES = DATA_WIDTH / 8;
   localparam logic [31:0] DATA_BYTES_32 = DATA_BYTES;
@@ -81,6 +82,7 @@ module dma_core #(
   localparam logic [15:0] DESC_LAST_BEAT = dma_pkg::DESC_WORDS - 1;
   localparam logic [7:0] DESC_ARLEN = dma_pkg::DESC_WORDS - 1;
 
+  // one deliberately serial state machine handles reads, writes, and descriptor work
   typedef enum logic [3:0] {
     ST_IDLE,
     ST_XFER_PREP,
@@ -100,6 +102,7 @@ module dma_core #(
     ST_DESC_STATUS_B
   } state_e;
 
+  // active transfer position plus the small buffer between axi read and write channels
   state_e                state_q;
   logic [ADDR_WIDTH-1:0] src_addr_q;
   logic [ADDR_WIDTH-1:0] dst_addr_q;
@@ -111,6 +114,7 @@ module dma_core #(
   logic                  read_error_seen_q;
   logic [DATA_WIDTH-1:0] burst_buffer_q [0:MAX_BURST_BEATS-1];
 
+  // descriptor state stays separate from transfer state so single-shot uses the same datapath
   logic                  desc_mode_active_q;
   logic [ADDR_WIDTH-1:0] desc_addr_q;
   logic [31:0]           desc_count_q;
@@ -129,6 +133,7 @@ module dma_core #(
   logic [ADDR_WIDTH-1:0] tile_row_src_addr_q;
   logic [ADDR_WIDTH-1:0] tile_row_dst_addr_q;
 
+  // software-facing progress and one-cycle completion pulses
   logic [31:0]           error_cause_q;
   logic [31:0]           completed_desc_count_q;
   logic [31:0]           completed_byte_count_q;
@@ -138,6 +143,7 @@ module dma_core #(
   logic                  desc_list_done_pulse_q;
   logic                  error_pulse_q;
 
+  // combinational helpers used to size the next request and decode the current response
   logic [15:0]           next_burst_beats;
   logic [31:0]           next_burst_bytes;
   logic                  xfer_read_last;
@@ -189,6 +195,7 @@ module dma_core #(
   logic                  b_fire;
 
   function automatic logic [2:0] axi_size(input int bytes);
+    // axi encodes bytes per beat as log2, spelling it out keeps odd widths obvious
     case (bytes)
       1:       axi_size = 3'd0;
       2:       axi_size = 3'd1;
@@ -202,6 +209,7 @@ module dma_core #(
   endfunction
 
   function automatic logic [STRB_WIDTH-1:0] descriptor_status_strobe();
+    // descriptor writeback only owns the low 32-bit status word
     descriptor_status_strobe = '0;
     for (int byte_idx = 0; byte_idx < STRB_WIDTH; byte_idx++) begin
       if (byte_idx < 4) begin
@@ -215,6 +223,7 @@ module dma_core #(
   );
     logic [12:0] bytes_to_boundary;
     begin
+      // axi bursts cannot cross a 4kb boundary, count how many full beats still fit
       bytes_to_boundary = 13'd4096 - {1'b0, addr[11:0]};
       beats_to_4kb = bytes_to_boundary / DATA_BYTES;
       if (beats_to_4kb == 16'd0) begin
@@ -233,6 +242,7 @@ module dma_core #(
     logic [15:0] src_boundary_beats;
     logic [15:0] dst_boundary_beats;
     begin
+      // start with the configured cap, then trim for remaining data and both boundaries
       remaining_beats = remaining_bytes / DATA_BYTES;
       limited_beats = MAX_BURST_BEATS;
       if (limited_beats == 16'd0) begin
@@ -255,7 +265,7 @@ module dma_core #(
       end
 
       if (limited_beats == 16'd0) begin
-        calc_burst_beats = 16'd1;
+        calc_burst_beats = 16'd1; // defensive floor, valid transfers should never reach zero
       end else begin
         calc_burst_beats = limited_beats;
       end
@@ -269,6 +279,7 @@ module dma_core #(
   );
     logic [ADDR_WIDTH-1:0] align_mask;
     begin
+      // the datapath only accepts nonzero transfers aligned to a full data beat
       align_mask = ADDR_WIDTH'(DATA_BYTES - 1);
       if (len_bytes == 32'd0) begin
         transfer_error_cause = ERROR_CAUSE_ZERO_LEN;
@@ -290,6 +301,7 @@ module dma_core #(
   );
     logic [ADDR_WIDTH-1:0] desc_align_mask;
     begin
+      // descriptor fetch is currently defined as eight 32-bit words on a 32-bit bus
       desc_align_mask = ADDR_WIDTH'(dma_pkg::DESC_BYTES - 1);
       if (desc_count == 32'd0) begin
         descriptor_start_error_cause = ERROR_CAUSE_DESC_COUNT_ZERO;
@@ -312,6 +324,7 @@ module dma_core #(
     input logic [31:0]           dst_stride
   );
     begin
+      // each row is a normal transfer, strides also need to land on whole beats
       if (row_bytes == 32'd0) begin
         tile_error_cause = ERROR_CAUSE_TILE_ROW_BYTES_ZERO;
       end else if (num_rows == 32'd0) begin
@@ -335,6 +348,7 @@ module dma_core #(
     input logic [31:0] cause
   );
     begin
+      // low bits carry done/error and the low error byte goes back into the descriptor
       descriptor_status_word = 32'd0;
       descriptor_status_word[0] = !is_error;
       descriptor_status_word[1] = is_error;
@@ -346,6 +360,7 @@ module dma_core #(
     input logic [DATA_WIDTH-1:0] data
   );
     begin
+      // descriptor words are always 32 bits even though the helper stays width-safe
       axi_data_to_word = 32'd0;
       for (int bit_idx = 0; bit_idx < DATA_WIDTH; bit_idx++) begin
         if (bit_idx < 32) begin
@@ -355,11 +370,13 @@ module dma_core #(
     end
   endfunction
 
+  // decide the next legal burst from the current transfer cursor
   assign next_burst_beats = calc_burst_beats(src_addr_q,
                                              dst_addr_q,
                                              remaining_bytes_q);
   assign next_burst_bytes = {16'd0, next_burst_beats} * DATA_BYTES_32;
 
+  // compare our expected beat against rlast too, early and missing rlast are both errors
   assign xfer_read_last = (read_beat_q == (burst_beats_q - 16'd1));
   assign desc_read_last = (read_beat_q == DESC_LAST_BEAT);
   assign write_last = (write_beat_q == (burst_beats_q - 16'd1));
@@ -368,12 +385,14 @@ module dma_core #(
   assign desc_read_error =
       (m_axi_rresp != 2'b00) || (m_axi_rlast != desc_read_last);
 
+  // validate starts before any axi request leaves the block
   assign single_start_cause = transfer_error_cause(src_addr_i,
                                                    dst_addr_i,
                                                    len_bytes_i);
   assign desc_start_cause = descriptor_start_error_cause(desc_base_i,
                                                          desc_count_i);
 
+  // break the fetched words back into the fields described by the register map
   assign desc_src_addr = ADDR_WIDTH'({desc_words_q[1], desc_words_q[0]});
   assign desc_dst_addr = ADDR_WIDTH'({desc_words_q[3], desc_words_q[2]});
   assign desc_len_bytes = desc_words_q[4];
@@ -382,6 +401,7 @@ module dma_core #(
   assign tile_num_rows = desc_ext_words_q[0];
   assign tile_src_stride = desc_ext_words_q[1];
   assign tile_dst_stride = desc_ext_words_q[2];
+  // base words tell us whether to reject, run linear, or fetch the 2d extension
   assign desc_base_check_cause =
       !desc_control[0] ? ERROR_CAUSE_DESC_INVALID :
       ((desc_control_mode != DESC_MODE_LINEAR) &&
@@ -397,6 +417,7 @@ module dma_core #(
                        tile_src_stride,
                        tile_dst_stride);
 
+  // short names for actual axi handshakes, state only advances on these
   assign ar_fire = m_axi_arvalid && m_axi_arready;
   assign aw_fire = m_axi_awvalid && m_axi_awready;
   assign read_final_fire = m_axi_rvalid && m_axi_rready &&
@@ -408,6 +429,7 @@ module dma_core #(
   assign b_fire = m_axi_bvalid && m_axi_bready;
 
   always_comb begin
+    // tag each request with enough context for its response-side sanity check
     read_alloc_txn_type = ((state_q == ST_DESC_FETCH_AR) ||
                            (state_q == ST_DESC_EXT_AR)) ?
                           TXN_TYPE_DESC_FETCH : TXN_TYPE_SOURCE_READ;
@@ -426,6 +448,7 @@ module dma_core #(
   assign write_alloc_valid = aw_fire;
   assign write_retire_valid = b_fire;
 
+  // reads and writes get separate tables even though this core currently uses axi id zero
   outstanding_table #(
     .ID_WIDTH (ID_WIDTH),
     .DEPTH    (OUTSTANDING_DEPTH)
@@ -480,6 +503,7 @@ module dma_core #(
     .empty         (write_table_empty)
   );
 
+  // expose the state machine cursor directly for software observability
   assign busy_o        = (state_q != ST_IDLE);
   assign done_pulse_o  = done_pulse_q;
   assign single_done_pulse_o = single_done_pulse_q;
@@ -495,6 +519,7 @@ module dma_core #(
   assign completed_desc_count_o = completed_desc_count_q;
   assign completed_byte_count_lo_o = completed_byte_count_q;
 
+  // read address selects descriptor memory or payload memory from the current state
   assign m_axi_arid    = '0;
   assign m_axi_araddr  = (state_q == ST_DESC_FETCH_AR) ? desc_addr_q :
                          (state_q == ST_DESC_EXT_AR) ?
@@ -513,6 +538,7 @@ module dma_core #(
                          (state_q == ST_DESC_FETCH_R) ||
                          (state_q == ST_DESC_EXT_R);
 
+  // write address similarly switches between payload data and descriptor status
   assign m_axi_awid    = '0;
   assign m_axi_awaddr  = (state_q == ST_DESC_STATUS_AW) ?
                          (desc_addr_q + ADDR_WIDTH'(DESC_STATUS_OFFSET)) :
@@ -537,6 +563,7 @@ module dma_core #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      // hard reset clears the transaction cursor, descriptor context, and scratch buffers
       state_q             <= ST_IDLE;
       src_addr_q          <= '0;
       dst_addr_q          <= '0;
@@ -579,6 +606,7 @@ module dma_core #(
         desc_ext_words_q[ext_idx] <= '0;
       end
     end else begin
+      // event outputs are pulses, each state below raises them only for its completion clock
       done_pulse_q  <= 1'b0;
       single_done_pulse_q <= 1'b0;
       desc_done_pulse_q <= 1'b0;
@@ -586,6 +614,7 @@ module dma_core #(
       error_pulse_q <= 1'b0;
 
       if (soft_reset_i) begin
+        // soft reset abandons current work but leaves the axi ports driven from idle state
         state_q             <= ST_IDLE;
         src_addr_q          <= '0;
         dst_addr_q          <= '0;
@@ -621,11 +650,12 @@ module dma_core #(
         end
       end else begin
         if (error_clear_i) begin
-          error_cause_q <= ERROR_CAUSE_NONE;
+          error_cause_q <= ERROR_CAUSE_NONE; // software can clear the saved cause while idle
         end
 
         case (state_q)
           ST_IDLE: begin
+            // latch a clean job only after checking single-shot or descriptor start arguments
             if (start_i) begin
               error_cause_q       <= ERROR_CAUSE_NONE;
               desc_index_q        <= '0;
@@ -641,6 +671,7 @@ module dma_core #(
                   error_cause_q  <= desc_start_cause;
                   error_pulse_q  <= 1'b1;
                 end else begin
+                  // descriptor mode starts by fetching the base words for descriptor zero
                   desc_mode_active_q <= 1'b1;
                   desc_addr_q        <= desc_base_i;
                   desc_count_q       <= desc_count_i;
@@ -654,6 +685,7 @@ module dma_core #(
                   error_cause_q <= single_start_cause;
                   error_pulse_q <= 1'b1;
                 end else begin
+                  // single-shot drops straight into the shared payload transfer path
                   src_addr_q        <= src_addr_i;
                   dst_addr_q        <= dst_addr_i;
                   remaining_bytes_q <= len_bytes_i;
@@ -664,6 +696,7 @@ module dma_core #(
           end
 
           ST_XFER_PREP: begin
+            // freeze this burst size before issuing either side of the copy
             burst_beats_q     <= next_burst_beats;
             burst_bytes_q     <= next_burst_bytes;
             read_beat_q       <= '0;
@@ -673,6 +706,7 @@ module dma_core #(
           end
 
           ST_XFER_AR: begin
+            // read the whole burst first, the local buffer keeps write timing independent
             if (ar_fire) begin
               read_beat_q       <= '0;
               read_error_seen_q <= 1'b0;
@@ -683,6 +717,7 @@ module dma_core #(
           ST_XFER_R: begin
             if (m_axi_rvalid) begin
               if (!read_lookup_hit) begin
+                // a response with no table entry means our transaction bookkeeping broke
                 error_cause_q       <= ERROR_CAUSE_OUTSTANDING_TABLE;
                 remaining_bytes_q   <= '0;
                 desc_status_word_q  <= descriptor_status_word(1'b1,
@@ -695,9 +730,10 @@ module dma_core #(
                   state_q       <= ST_IDLE;
                 end
               end else begin
-                burst_buffer_q[read_beat_q] <= m_axi_rdata;
+                burst_buffer_q[read_beat_q] <= m_axi_rdata; // hold data until the write burst
 
                 if (m_axi_rlast || xfer_read_last) begin
+                  // do not start writing if any beat or the final response looked wrong
                   if (read_retire_error || read_error_seen_q || xfer_read_error) begin
                     error_cause_q       <= read_retire_error ?
                                            ERROR_CAUSE_OUTSTANDING_TABLE :
@@ -720,7 +756,7 @@ module dma_core #(
                   end
                 end else begin
                   if (m_axi_rresp != 2'b00) begin
-                    read_error_seen_q <= 1'b1;
+                    read_error_seen_q <= 1'b1; // remember an early bad beat until burst end
                   end
                   read_beat_q <= read_beat_q + 16'd1;
                 end
@@ -729,6 +765,7 @@ module dma_core #(
           end
 
           ST_XFER_AW: begin
+            // only issue the destination address after the full source burst is buffered
             if (aw_fire) begin
               write_beat_q <= '0;
               state_q      <= ST_XFER_W;
@@ -737,6 +774,7 @@ module dma_core #(
 
           ST_XFER_W: begin
             if (m_axi_wready) begin
+              // wvalid stays asserted from the state, this counter moves on accepted beats
               if (write_last) begin
                 state_q <= ST_XFER_B;
               end else begin
@@ -747,6 +785,7 @@ module dma_core #(
 
           ST_XFER_B: begin
             if (m_axi_bvalid) begin
+              // the write response decides whether to continue, finish, or report an error
               if (!write_lookup_hit || write_retire_error) begin
                 error_cause_q       <= ERROR_CAUSE_OUTSTANDING_TABLE;
                 remaining_bytes_q   <= '0;
@@ -772,11 +811,13 @@ module dma_core #(
                   state_q       <= ST_IDLE;
                 end
               end else if (remaining_bytes_q == burst_bytes_q) begin
+                // payload is finished, either move to the next tile row or wrap up the job
                 remaining_bytes_q <= '0;
                 completed_byte_count_q <= completed_byte_count_q + burst_bytes_q;
                 if (desc_mode_active_q) begin
                   if (tile_mode_active_q &&
                       ((tile_current_row_q + 32'd1) < tile_num_rows_q)) begin
+                    // strides point at the next row while row_bytes stays the transfer length
                     tile_current_row_q <= tile_current_row_q + 32'd1;
                     tile_row_src_addr_q <= tile_row_src_addr_q +
                                            ADDR_WIDTH'(tile_src_stride_q);
@@ -795,11 +836,13 @@ module dma_core #(
                     state_q             <= ST_DESC_STATUS_AW;
                   end
                 end else begin
+                  // single-shot has no descriptor status writeback, it can finish immediately
                   done_pulse_q        <= 1'b1;
                   single_done_pulse_q <= 1'b1;
                   state_q             <= ST_IDLE;
                 end
               end else begin
+                // more payload remains, advance both cursors by exactly the completed burst
                 src_addr_q        <= src_addr_q + ADDR_WIDTH'(burst_bytes_q);
                 dst_addr_q        <= dst_addr_q + ADDR_WIDTH'(burst_bytes_q);
                 remaining_bytes_q <= remaining_bytes_q - burst_bytes_q;
@@ -810,6 +853,7 @@ module dma_core #(
           end
 
           ST_DESC_FETCH_AR: begin
+            // fetch the fixed eight-word base descriptor
             if (ar_fire) begin
               read_beat_q       <= '0;
               read_error_seen_q <= 1'b0;
@@ -824,7 +868,7 @@ module dma_core #(
                 error_pulse_q <= 1'b1;
                 state_q       <= ST_IDLE;
               end else begin
-                desc_words_q[read_beat_q] <= axi_data_to_word(m_axi_rdata);
+                desc_words_q[read_beat_q] <= axi_data_to_word(m_axi_rdata); // one word per beat
 
                 if (m_axi_rlast || desc_read_last) begin
                   if (read_retire_error || read_error_seen_q || desc_read_error) begin
@@ -834,7 +878,7 @@ module dma_core #(
                     error_pulse_q <= 1'b1;
                     state_q       <= ST_IDLE;
                   end else begin
-                    state_q <= ST_DESC_CHECK;
+                    state_q <= ST_DESC_CHECK; // all base words are now safe to decode
                   end
                 end else begin
                   if (m_axi_rresp != 2'b00) begin
@@ -847,6 +891,7 @@ module dma_core #(
           end
 
           ST_DESC_CHECK: begin
+            // bad descriptors still get a status writeback so software can see the failure
             if (desc_base_check_cause != ERROR_CAUSE_NONE) begin
               error_cause_q       <= desc_base_check_cause;
               desc_status_word_q  <= descriptor_status_word(1'b1,
@@ -854,10 +899,12 @@ module dma_core #(
               desc_status_error_q <= 1'b1;
               state_q             <= ST_DESC_STATUS_AW;
             end else if (desc_control_mode == DESC_MODE_2D) begin
+              // 2d fields live in the extension immediately after the base descriptor
               read_beat_q       <= '0;
               read_error_seen_q <= 1'b0;
               state_q           <= ST_DESC_EXT_AR;
             end else begin
+              // linear descriptor becomes one normal payload transfer
               src_addr_q          <= desc_src_addr;
               dst_addr_q          <= desc_dst_addr;
               remaining_bytes_q   <= desc_len_bytes;
@@ -869,6 +916,7 @@ module dma_core #(
           end
 
           ST_DESC_EXT_AR: begin
+            // fetch another eight words containing row count and both strides
             if (ar_fire) begin
               read_beat_q       <= '0;
               read_error_seen_q <= 1'b0;
@@ -885,7 +933,7 @@ module dma_core #(
                 desc_status_error_q <= 1'b1;
                 state_q             <= ST_DESC_STATUS_AW;
               end else begin
-                desc_ext_words_q[read_beat_q] <= axi_data_to_word(m_axi_rdata);
+                desc_ext_words_q[read_beat_q] <= axi_data_to_word(m_axi_rdata); // save extension
 
                 if (m_axi_rlast || desc_read_last) begin
                   if (read_retire_error || read_error_seen_q || desc_read_error) begin
@@ -899,7 +947,7 @@ module dma_core #(
                     desc_status_error_q <= 1'b1;
                     state_q             <= ST_DESC_STATUS_AW;
                   end else begin
-                    state_q <= ST_TILE_CHECK;
+                    state_q <= ST_TILE_CHECK; // extension is complete, validate as one set
                   end
                 end else begin
                   if (m_axi_rresp != 2'b00) begin
@@ -912,6 +960,7 @@ module dma_core #(
           end
 
           ST_TILE_CHECK: begin
+            // a valid tile reuses the normal transfer states once per row
             if (desc_tile_check_cause != ERROR_CAUSE_NONE) begin
               error_cause_q       <= desc_tile_check_cause;
               desc_status_word_q  <= descriptor_status_word(1'b1,
@@ -937,12 +986,14 @@ module dma_core #(
           end
 
           ST_DESC_STATUS_AW: begin
+            // every processed descriptor gets one low-word status writeback
             if (aw_fire) begin
               state_q <= ST_DESC_STATUS_W;
             end
           end
 
           ST_DESC_STATUS_W: begin
+            // status is one beat, so acceptance moves directly to the response
             if (m_axi_wready) begin
               state_q <= ST_DESC_STATUS_B;
             end
@@ -950,6 +1001,7 @@ module dma_core #(
 
           ST_DESC_STATUS_B: begin
             if (m_axi_bvalid) begin
+              // writeback errors stop the list since software cannot trust descriptor state
               if (!write_lookup_hit || write_retire_error) begin
                 error_cause_q <= ERROR_CAUSE_OUTSTANDING_TABLE;
                 error_pulse_q <= 1'b1;
@@ -969,6 +1021,7 @@ module dma_core #(
                 state_q       <= ST_IDLE;
               end else if (desc_stop_after_q ||
                            ((desc_index_q + 32'd1) >= desc_count_q)) begin
+                // stop bit and natural list end share the same completion path
                 completed_desc_count_q <= completed_desc_count_q + 32'd1;
                 desc_done_pulse_q      <= 1'b1;
                 desc_list_done_pulse_q <= 1'b1;
@@ -977,6 +1030,7 @@ module dma_core #(
                 tile_mode_active_q     <= 1'b0;
                 state_q                <= ST_IDLE;
               end else begin
+                // successful descriptor, advance by its actual linear or tiled size
                 completed_desc_count_q <= completed_desc_count_q + 32'd1;
                 desc_done_pulse_q      <= 1'b1;
                 desc_index_q           <= desc_index_q + 32'd1;

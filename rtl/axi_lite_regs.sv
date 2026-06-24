@@ -85,6 +85,7 @@ module axi_lite_regs #(
   localparam logic [1:0] AXI_RESP_OKAY   = 2'b00;
   localparam logic [1:0] AXI_RESP_SLVERR = 2'b10;
 
+  // axi-lite can send address and data separately, so hold each half until both arrive
   logic                         aw_valid_q;
   logic [REG_ADDR_WIDTH-1:0]    awaddr_q;
   logic                         w_valid_q;
@@ -96,6 +97,7 @@ module axi_lite_regs #(
   logic [REG_DATA_WIDTH-1:0]    rdata_q;
   logic [1:0]                   rresp_q;
 
+  // these are the actual software-programmable register values
   logic [31:0]                  src_addr_lo_q;
   logic [31:0]                  src_addr_hi_q;
   logic [31:0]                  dst_addr_lo_q;
@@ -113,6 +115,7 @@ module axi_lite_regs #(
   logic                         soft_reset_pulse_q;
   logic                         error_clear_pulse_q;
 
+  // next-state copies keep the write decode and sticky status rules in one place
   logic                         write_fire;
   logic [REG_DATA_WIDTH-1:0]    read_data_mux;
   logic [1:0]                   read_resp_mux;
@@ -140,7 +143,7 @@ module axi_lite_regs #(
     input logic [REG_DATA_WIDTH-1:0] new_value,
     input logic [STRB_WIDTH-1:0]     strb
   );
-    apply_wstrb = old_value;
+    apply_wstrb = old_value; // untouched byte lanes keep their old value
     for (int byte_idx = 0; byte_idx < STRB_WIDTH; byte_idx++) begin
       if (strb[byte_idx]) begin
         apply_wstrb[(byte_idx * 8) +: 8] = new_value[(byte_idx * 8) +: 8];
@@ -148,7 +151,7 @@ module axi_lite_regs #(
     end
   endfunction
 
-  assign s_axil_awready = !aw_valid_q && !bvalid_q;
+  assign s_axil_awready = !aw_valid_q && !bvalid_q; // take one write at a time
   assign s_axil_wready  = !w_valid_q && !bvalid_q;
   assign s_axil_bvalid  = bvalid_q;
   assign s_axil_bresp   = bresp_q;
@@ -167,11 +170,12 @@ module axi_lite_regs #(
   assign desc_count_o       = desc_count_q;
   assign desc_mode_enable_o = desc_mode_enable_q;
   assign irq_enable_o       = irq_enable_q;
-  assign irq_o              = |(irq_status_q & irq_enable_q);
+  assign irq_o              = |(irq_status_q & irq_enable_q); // any enabled sticky cause raises irq
 
-  assign write_fire = aw_valid_q && w_valid_q && !bvalid_q;
+  assign write_fire = aw_valid_q && w_valid_q && !bvalid_q; // both write halves are now captured
 
   always_comb begin
+    // reads are simple: return the selected register or slverr for a bad offset
     read_data_mux = '0;
     read_resp_mux = AXI_RESP_OKAY;
 
@@ -250,6 +254,7 @@ module axi_lite_regs #(
   end
 
   always_comb begin
+    // start from the current values so only the addressed register changes
     src_addr_lo_d = src_addr_lo_q;
     src_addr_hi_d = src_addr_hi_q;
     dst_addr_lo_d = dst_addr_lo_q;
@@ -275,8 +280,7 @@ module axi_lite_regs #(
     if (write_fire) begin
       case (awaddr_q)
         CTRL: begin
-          // CTRL bits are write-one pulse fields handled in the sequential
-          // block. The register itself reads as zero.
+          // ctrl is write-one pulse territory, the sequential block makes the pulses
         end
         STATUS: begin
           if (wstrb_q[0] && wdata_q[1]) begin
@@ -320,7 +324,7 @@ module axi_lite_regs #(
           end
         end
         VERSION: begin
-          // Read-only constant. Writes are accepted and ignored.
+          // version is read only, accepting the write keeps the bus behavior simple
         end
         DESC_BASE_LO: begin
           desc_base_lo_d = apply_wstrb(desc_base_lo_q, wdata_q, wstrb_q);
@@ -335,7 +339,7 @@ module axi_lite_regs #(
           desc_mode_enable_d = mode_wdata[0];
         end
         DESC_INDEX: begin
-          // Read-only debug register. Writes are accepted and ignored.
+          // live debug value from the core, so there is nothing local to update
         end
         ERROR_CAUSE: begin
           if (|wstrb_q && |wdata_q) begin
@@ -347,7 +351,7 @@ module axi_lite_regs #(
         ACTIVE_DST_LO,
         COMPLETED_DESC_COUNT,
         COMPLETED_BYTE_COUNT_LO: begin
-          // Read-only observability registers. Writes are accepted and ignored.
+          // live observability values from the core, writes are harmlessly ignored
         end
         default: begin
           write_resp_mux = AXI_RESP_SLVERR;
@@ -356,7 +360,7 @@ module axi_lite_regs #(
     end
 
     if (done_set_i) begin
-      done_d = 1'b1;
+      done_d = 1'b1; // sticky until software clears status bit 1
     end
 
     if (single_done_set_i) begin
@@ -365,7 +369,7 @@ module axi_lite_regs #(
 
     if (error_set_i) begin
       error_d = 1'b1;
-      irq_status_d[1] = 1'b1;
+      irq_status_d[1] = 1'b1; // status and irq remember the error independently
     end
 
     if (desc_done_set_i) begin
@@ -406,6 +410,7 @@ module axi_lite_regs #(
       soft_reset_pulse_q <= 1'b0;
       error_clear_pulse_q <= 1'b0;
     end else begin
+      // pulse outputs fall back to zero unless a write or clear asks for one
       start_pulse_q      <= 1'b0;
       soft_reset_pulse_q <= 1'b0;
       error_clear_pulse_q <= error_clear_d;
@@ -424,6 +429,7 @@ module axi_lite_regs #(
       error_q            <= error_d;
 
       if (s_axil_awvalid && s_axil_awready) begin
+        // address and data may land on different clocks, capture whichever shows up
         aw_valid_q <= 1'b1;
         awaddr_q   <= s_axil_awaddr;
       end
@@ -435,6 +441,7 @@ module axi_lite_regs #(
       end
 
       if (write_fire) begin
+        // once both halves are present, perform the write and hold the response
         aw_valid_q <= 1'b0;
         w_valid_q  <= 1'b0;
         bvalid_q   <= 1'b1;
@@ -449,6 +456,7 @@ module axi_lite_regs #(
       end
 
       if (s_axil_arvalid && s_axil_arready) begin
+        // read data is captured with the address and held until the master takes it
         rvalid_q <= 1'b1;
         rdata_q  <= read_data_mux;
         rresp_q  <= read_resp_mux;

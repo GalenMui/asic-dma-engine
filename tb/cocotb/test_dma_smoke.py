@@ -4,6 +4,7 @@ from cocotb.triggers import RisingEdge
 import random
 
 
+# csr offsets match the software view used to program and inspect the dma
 CTRL = 0x00
 STATUS = 0x04
 SRC_ADDR_LO = 0x08
@@ -27,6 +28,7 @@ COMPLETED_BYTE_COUNT_LO = 0x50
 DATA_BYTES = 4
 MAX_BURST_BEATS = 16
 
+# error values are repeated here so failures can check the exact public cause
 ERROR_CAUSE_ZERO_LEN = 0x1
 ERROR_CAUSE_SRC_UNALIGNED = 0x2
 ERROR_CAUSE_DST_UNALIGNED = 0x3
@@ -48,11 +50,13 @@ DESC_MODE_2D = 1
 
 
 def start_clocks(dut):
+    # unrelated clock periods make the top-level cdc paths do real work in every test
     cocotb.start_soon(Clock(dut.cfg_clk, 10, units="ns").start())
     cocotb.start_soon(Clock(dut.dma_clk, 7, units="ns").start())
 
 
 def _set_axil_idle(dut):
+    # keep the configuration master quiet until a helper starts a transaction
     dut.s_axil_awaddr.value = 0
     dut.s_axil_awprot.value = 0
     dut.s_axil_awvalid.value = 0
@@ -67,6 +71,7 @@ def _set_axil_idle(dut):
 
 
 def _set_axi_memory_idle(dut):
+    # memory-side inputs start inactive so reset cannot accidentally handshake
     dut.m_axi_awready.value = 0
     dut.m_axi_wready.value = 0
     dut.m_axi_bid.value = 0
@@ -81,6 +86,7 @@ def _set_axi_memory_idle(dut):
 
 
 async def reset_dut(dut):
+    # both domains reset together here, then the different clocks release them naturally
     _set_axil_idle(dut)
     _set_axi_memory_idle(dut)
     dut.cfg_rst_n.value = 0
@@ -94,6 +100,7 @@ async def reset_dut(dut):
 
 
 async def axil_write(dut, addr, data, strb=0xF):
+    # address and data are tracked separately since either channel may win first
     dut.s_axil_awaddr.value = addr
     dut.s_axil_awprot.value = 0
     dut.s_axil_awvalid.value = 1
@@ -114,6 +121,7 @@ async def axil_write(dut, addr, data, strb=0xF):
             dut.s_axil_wvalid.value = 0
 
     while True:
+        # leave bready asserted until the slave closes out this write
         await RisingEdge(dut.cfg_clk)
         if int(dut.s_axil_bvalid.value):
             resp = int(dut.s_axil_bresp.value)
@@ -125,6 +133,7 @@ async def axil_write(dut, addr, data, strb=0xF):
 
 
 async def axil_read(dut, addr):
+    # one outstanding config read is enough for these directed tests
     dut.s_axil_araddr.value = addr
     dut.s_axil_arprot.value = 0
     dut.s_axil_arvalid.value = 1
@@ -149,6 +158,7 @@ async def axil_read(dut, addr):
 
 
 async def wait_for_status_bit(dut, mask, expected=True, timeout_cycles=2000):
+    # poll through the real register interface so cdc latency is included
     for _ in range(timeout_cycles):
         data, resp = await axil_read(dut, STATUS)
         assert resp == 0
@@ -159,6 +169,7 @@ async def wait_for_status_bit(dut, mask, expected=True, timeout_cycles=2000):
 
 
 def _apply_wstrb(old_value, new_value, strb):
+    # memory is word based, this recreates byte-lane writes from axi wstrb
     value = old_value
     for byte_idx in range(4):
         if strb & (1 << byte_idx):
@@ -168,16 +179,19 @@ def _apply_wstrb(old_value, new_value, strb):
 
 
 def _stall_active(config, name, cycle):
+    # a zero interval means no stalls, otherwise pause on each matching cycle
     interval = config.get(name, 0)
     return interval > 0 and (cycle % interval) == 0
 
 
 def _has_addr_error(config, name, txn_addr, beat_addr):
+    # tests can inject an error for the whole burst address or one specific beat
     error_addrs = config.get(name, set())
     return txn_addr in error_addrs or beat_addr in error_addrs
 
 
 def _drive_read_beat(dut, memory, read_txn, config):
+    # drive the current word and make rlast agree with the modeled burst length
     beat = read_txn["beat"]
     addr = read_txn["addr"] + beat * DATA_BYTES
     dut.m_axi_rdata.value = memory.get(addr, 0)
@@ -189,6 +203,7 @@ def _drive_read_beat(dut, memory, read_txn, config):
 
 
 async def axi_memory_model(dut, memory, log=None, config=None):
+    # small single-transaction axi memory, enough to test bursts, stalls, and errors
     config = config or {}
     read_txn = None
     write_txn = None
@@ -211,6 +226,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
         cycle += 1
 
         if not int(dut.dma_rst_n.value):
+            # forget any half-finished transaction when the dma domain resets
             read_txn = None
             write_txn = None
             write_resp = None
@@ -223,6 +239,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
             continue
 
         if int(dut.m_axi_rvalid.value) and int(dut.m_axi_rready.value):
+            # accepted read beat either advances the burst or releases the channel
             if read_txn is not None and read_txn["beat"] < read_txn["beats"] - 1:
                 read_txn["beat"] += 1
                 read_txn["delay"] = config.get("rvalid_delay", 0)
@@ -237,6 +254,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
             read_txn is not None
             and not int(dut.m_axi_rvalid.value)
         ):
+            # optional delay leaves visible gaps between accepted read beats
             if read_txn.get("delay", 0) > 0:
                 read_txn["delay"] -= 1
             else:
@@ -246,6 +264,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
             dut.m_axi_bvalid.value = 0
 
         if write_resp is not None and not int(dut.m_axi_bvalid.value):
+            # response delay is counted only while bvalid is not already occupied
             if write_resp["delay"] > 0:
                 write_resp["delay"] -= 1
             else:
@@ -253,6 +272,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
                 dut.m_axi_bvalid.value = 1
                 write_resp = None
 
+        # ready signals model both resource availability and configured backpressure
         dut.m_axi_arready.value = (
             1 if read_txn is None and not _stall_active(config, "ar_stall_every", cycle)
             else 0
@@ -281,6 +301,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
             and int(dut.m_axi_arvalid.value)
             and int(dut.m_axi_arready.value)
         ):
+            # capture one read address and derive the real beat count from arlen
             addr = int(dut.m_axi_araddr.value)
             beats = int(dut.m_axi_arlen.value) + 1
             read_txn = {"addr": addr, "beats": beats, "beat": 0}
@@ -303,6 +324,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
             and int(dut.m_axi_awvalid.value)
             and int(dut.m_axi_awready.value)
         ):
+            # data is accepted only after its write address has created a transaction
             addr = int(dut.m_axi_awaddr.value)
             beats = int(dut.m_axi_awlen.value) + 1
             write_txn = {"addr": addr, "beats": beats, "beat": 0}
@@ -324,6 +346,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
             and int(dut.m_axi_wready.value)
             and not int(dut.m_axi_bvalid.value)
         ):
+            # merge each accepted beat into memory and answer after the final beat
             beat = write_txn["beat"]
             addr = write_txn["addr"] + beat * DATA_BYTES
             old_value = memory.get(addr, 0)
@@ -352,6 +375,7 @@ async def axi_memory_model(dut, memory, log=None, config=None):
 
 
 async def program_transfer(dut, src, dst, length):
+    # program the split 64-bit addresses exactly as software would
     assert await axil_write(dut, SRC_ADDR_LO, src & 0xFFFFFFFF) == 0
     assert await axil_write(dut, SRC_ADDR_HI, src >> 32) == 0
     assert await axil_write(dut, DST_ADDR_LO, dst & 0xFFFFFFFF) == 0
@@ -360,6 +384,7 @@ async def program_transfer(dut, src, dst, length):
 
 
 async def program_descriptor_mode(dut, desc_base, desc_count):
+    # descriptor mode only needs the list base, list length, and mode bit
     assert await axil_write(dut, DESC_BASE_LO, desc_base & 0xFFFFFFFF) == 0
     assert await axil_write(dut, DESC_BASE_HI, desc_base >> 32) == 0
     assert await axil_write(dut, DESC_COUNT, desc_count) == 0
@@ -367,11 +392,13 @@ async def program_descriptor_mode(dut, desc_base, desc_count):
 
 
 def write_words(memory, base, words):
+    # the memory model stores one 32-bit value at each byte address
     for idx, word in enumerate(words):
         memory[base + idx * DATA_BYTES] = word & 0xFFFFFFFF
 
 
 def write_descriptor(memory, base, src, dst, length, control=0x1):
+    # lay out the eight base words in the same order the rtl fetches them
     write_words(
         memory,
         base,
@@ -399,6 +426,7 @@ def write_2d_descriptor(
     dst_stride,
     control=(0x1 | (DESC_MODE_2D << 4)),
 ):
+    # tiled descriptors append another eight words for rows and strides
     write_words(
         memory,
         base,
@@ -424,16 +452,19 @@ def write_2d_descriptor(
 
 
 def fill_memory(memory, base, words):
+    # recognizable data makes copied words and offsets easy to spot in a waveform
     for idx in range(words):
         memory[base + idx * DATA_BYTES] = (0xA5000000 | idx) & 0xFFFFFFFF
 
 
 def assert_copy(memory, src, dst, length):
+    # compare each transferred bus word, no hidden bulk slicing
     for offset in range(0, length, DATA_BYTES):
         assert memory[dst + offset] == memory[src + offset]
 
 
 def assert_no_4kb_crossing(transactions):
+    # first and last byte of every logged burst must stay on the same axi page
     for txn in transactions:
         start_page = txn["addr"] >> 12
         last_addr = txn["addr"] + txn["beats"] * DATA_BYTES - 1
@@ -441,11 +472,13 @@ def assert_no_4kb_crossing(transactions):
 
 
 async def clear_status_and_irq(dut):
+    # clear sticky completion state before reusing the same dut in a loop
     assert await axil_write(dut, STATUS, 0x6) == 0
     assert await axil_write(dut, IRQ_STATUS, 0xF) == 0
 
 
 async def run_single_shot_and_check(dut, memory, src, dst, length):
+    # common happy path for the seeded single-shot cases below
     await program_transfer(dut, src, dst, length)
     assert await axil_write(dut, MODE, 0x0) == 0
     assert await axil_write(dut, CTRL, 0x1) == 0
@@ -455,6 +488,7 @@ async def run_single_shot_and_check(dut, memory, src, dst, length):
 
 
 async def expect_error_cause(dut, expected_cause):
+    # errors must set error without also pretending the transfer completed
     data = await wait_for_status_bit(dut, 0x4, expected=True)
     assert (data & 0x2) == 0
     error_cause, resp = await axil_read(dut, ERROR_CAUSE)
@@ -464,6 +498,7 @@ async def expect_error_cause(dut, expected_cause):
 
 @cocotb.test()
 async def dma_memory_to_memory_smoke(dut):
+    # basic four-word copy checks data, burst shape, completion, and irq clearing
     start_clocks(dut)
     memory = {
         0x1000: 0x11223344,
@@ -505,6 +540,7 @@ async def dma_memory_to_memory_smoke(dut):
 
 @cocotb.test()
 async def dma_unaligned_address_sets_error(dut):
+    # reject a bad source before the memory side gets a chance to move anything
     start_clocks(dut)
     memory = {}
     cocotb.start_soon(axi_memory_model(dut, memory))
@@ -526,6 +562,7 @@ async def dma_unaligned_address_sets_error(dut):
 
 @cocotb.test()
 async def dma_multi_burst_transfer(dut):
+    # a transfer longer than the cap should become one full burst and one short burst
     start_clocks(dut)
     memory = {}
     log = {"reads": [], "writes": []}
@@ -545,6 +582,7 @@ async def dma_multi_burst_transfer(dut):
 
 @cocotb.test()
 async def dma_final_short_burst_transfer(dut):
+    # final burst length should match the exact words left, not round up to the cap
     start_clocks(dut)
     memory = {}
     log = {"reads": [], "writes": []}
@@ -564,6 +602,7 @@ async def dma_final_short_burst_transfer(dut):
 
 @cocotb.test()
 async def dma_splits_bursts_at_4kb_boundaries(dut):
+    # source and destination boundaries both trim bursts even when length allows more
     start_clocks(dut)
     memory = {}
     log = {"reads": [], "writes": []}
@@ -588,6 +627,7 @@ async def dma_splits_bursts_at_4kb_boundaries(dut):
 
 @cocotb.test()
 async def descriptor_mode_single_descriptor(dut):
+    # one linear descriptor should fetch, copy, write status, and finish the list
     start_clocks(dut)
     memory = {}
     log = {"reads": [], "writes": []}
@@ -613,6 +653,7 @@ async def descriptor_mode_single_descriptor(dut):
 
 @cocotb.test()
 async def descriptor_mode_2d_padded_to_compact(dut):
+    # source rows include padding while destination rows are packed back to back
     start_clocks(dut)
     memory = {}
     log = {"reads": [], "writes": []}
@@ -672,6 +713,7 @@ async def descriptor_mode_2d_padded_to_compact(dut):
 
 @cocotb.test()
 async def descriptor_mode_multiple_descriptors(dut):
+    # list processing should advance descriptor address and preserve each copy length
     start_clocks(dut)
     memory = {}
     log = {"reads": [], "writes": []}
@@ -709,6 +751,7 @@ async def descriptor_mode_multiple_descriptors(dut):
 
 @cocotb.test()
 async def descriptor_mode_invalid_descriptor_sets_error(dut):
+    # invalid control gets an error status writeback instead of starting payload traffic
     start_clocks(dut)
     memory = {}
     desc_base = 0x11000
@@ -733,6 +776,7 @@ async def descriptor_mode_invalid_descriptor_sets_error(dut):
 
 @cocotb.test()
 async def irq_error_clear_and_error_cause(dut):
+    # status, irq, and saved cause have related but separately clearable behavior
     start_clocks(dut)
     memory = {}
     cocotb.start_soon(axi_memory_model(dut, memory))
@@ -762,6 +806,7 @@ async def irq_error_clear_and_error_cause(dut):
 
 @cocotb.test()
 async def axi_read_error_response_sets_error(dut):
+    # an rresp error should stop before any destination write is treated as successful
     start_clocks(dut)
     memory = {}
     src = 0x16000
@@ -784,6 +829,7 @@ async def axi_read_error_response_sets_error(dut):
 
 @cocotb.test()
 async def axi_write_error_response_sets_error(dut):
+    # a bad bresp reports a write failure even though data beats already reached memory
     start_clocks(dut)
     memory = {}
     src = 0x18000
@@ -806,6 +852,7 @@ async def axi_write_error_response_sets_error(dut):
 
 @cocotb.test()
 async def dma_backpressure_transfer_and_observability(dut):
+    # stagger every axi channel and sample the live cursor while the job is still busy
     start_clocks(dut)
     memory = {}
     src = 0x1A000
@@ -853,6 +900,7 @@ async def dma_backpressure_transfer_and_observability(dut):
 
 @cocotb.test()
 async def randomized_aligned_single_shot_transfers(dut):
+    # fixed seed gives varied legal sizes and offsets without making failures slippery
     seed = 0xD06
     rng = random.Random(seed)
     dut._log.info("randomized_aligned_single_shot_transfers seed=0x%x", seed)
@@ -876,6 +924,7 @@ async def randomized_aligned_single_shot_transfers(dut):
 
 @cocotb.test()
 async def randomized_descriptor_list(dut):
+    # build a small seeded list and check aggregate counters as well as every copy
     seed = 0xD354
     rng = random.Random(seed)
     dut._log.info("randomized_descriptor_list seed=0x%x", seed)
@@ -920,6 +969,7 @@ async def randomized_descriptor_list(dut):
 
 @cocotb.test()
 async def descriptor_validation_error_causes(dut):
+    # table-driven invalid inputs make sure each public error code stays distinct
     start_clocks(dut)
     memory = {}
     cocotb.start_soon(axi_memory_model(dut, memory))
@@ -975,6 +1025,7 @@ async def descriptor_validation_error_causes(dut):
 
 @cocotb.test()
 async def reset_idle_and_active_clears_state(dut):
+    # reset once while idle and once mid-job, both should return every csr to quiet state
     start_clocks(dut)
     memory = {}
     src = 0x70000

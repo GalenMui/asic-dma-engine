@@ -140,21 +140,21 @@ module dma_top #(
     cfg_len_bytes,
     cfg_desc_count,
     cfg_desc_mode_enable
-  };
+  }; // pack into a single bus, can pass through the cdc
 
   always_ff @(posedge cfg_clk or negedge cfg_rst_n) begin
-    if (!cfg_rst_n) begin
+    if (!cfg_rst_n) begin // if reseting our control bus no longer valid, snapshot becomes 0
       cfg_control_valid    <= 1'b0;
       cfg_control_snapshot <= '0;
     end else begin
       if (cfg_control_valid && cfg_control_ready) begin
         cfg_control_valid <= 1'b0;
-      end
+      end // begin
 
       if (cfg_start_pulse && (!cfg_control_valid || cfg_control_ready)) begin
         cfg_control_snapshot <= cfg_control_bus;
         cfg_control_valid    <= 1'b1;
-      end
+      end // load the snapshot
     end
   end
 
@@ -165,7 +165,7 @@ module dma_top #(
     dma_len_bytes,
     dma_desc_count,
     dma_desc_mode_enable
-  } = dma_control_bus;
+  } = dma_control_bus; // reverse assignment breakdown
 
   assign dma_status_bus = {
     dma_active_src_addr,

@@ -2,16 +2,16 @@
 
 package dma_pkg;
 
-  // Current integration defaults. The top-level path is a conservative
-  // burst-capable AXI DMA with linear descriptor processing, bounded
-  // outstanding tracking, and explicit top-level CDC.
+  // shared widths live here so the rtl and packed types all agree
   parameter int ADDR_WIDTH        = 64;
   parameter int DATA_WIDTH        = 32;
   parameter int ID_WIDTH          = 4;
   parameter int STRB_WIDTH        = DATA_WIDTH / 8;
 
+  // software can read this back to tell which register layout it is talking to
   localparam logic [31:0] VERSION_VALUE = 32'h0008_0005;
 
+  // byte offsets for the small axi-lite register window
   localparam logic [31:0] REG_CTRL        = 32'h0000_0000;
   localparam logic [31:0] REG_STATUS      = 32'h0000_0004;
   localparam logic [31:0] REG_SRC_ADDR_LO = 32'h0000_0008;
@@ -34,6 +34,7 @@ package dma_pkg;
   localparam logic [31:0] REG_COMPLETED_DESC_COUNT  = 32'h0000_004c;
   localparam logic [31:0] REG_COMPLETED_BYTE_COUNT_LO = 32'h0000_0050;
 
+  // keep the error values stable since software and the tests both see these
   localparam logic [31:0] ERROR_CAUSE_NONE                 = 32'h0000_0000;
   localparam logic [31:0] ERROR_CAUSE_ZERO_LEN             = 32'h0000_0001;
   localparam logic [31:0] ERROR_CAUSE_SRC_UNALIGNED        = 32'h0000_0002;
@@ -53,6 +54,7 @@ package dma_pkg;
   localparam logic [31:0] ERROR_CAUSE_TILE_SRC_STRIDE       = 32'h0000_0010;
   localparam logic [31:0] ERROR_CAUSE_TILE_DST_STRIDE       = 32'h0000_0011;
 
+  // conservative sizes for the current descriptor and burst implementation
   parameter int DESC_WORDS        = 8;
   parameter int DESC_BYTES        = 32;
   parameter int TILE_DESC_WORDS   = 16;
@@ -63,9 +65,12 @@ package dma_pkg;
   parameter int OUTSTANDING_DEPTH = 4;
   parameter int MAX_BURST_LEN     = 16;
 
+  // mode values come straight from the descriptor control word
   localparam logic [3:0] DESC_MODE_LINEAR = 4'd0;
   localparam logic [3:0] DESC_MODE_2D     = 4'd1;
 
+  // these types describe the intended software-facing formats, even where the
+  // core currently handles the words directly
   typedef enum logic [1:0] {
     DESC_STATUS_IDLE,
     DESC_STATUS_FETCHED,
@@ -92,6 +97,7 @@ package dma_pkg;
   localparam int COMP_RESERVED_W =
       (COMP_BYTES * 8) - (16 + 32 + 8 + 2);
 
+  // packed structs make the descriptor and completion bit layouts explicit
   typedef struct packed {
     logic [ADDR_WIDTH-1:0] src_addr;
     logic [ADDR_WIDTH-1:0] dst_addr;
@@ -120,6 +126,7 @@ package dma_pkg;
     logic [7:0]            user;
   } dma_cmd_t;
 
+  // one entry is the bookkeeping needed to match an axi response back up
   typedef struct packed {
     logic                  valid;
     logic [ID_WIDTH-1:0]   axi_id;

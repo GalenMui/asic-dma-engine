@@ -1,8 +1,7 @@
 `ifndef ASIC_DMA_SYS_DEFS_SVH
 `define ASIC_DMA_SYS_DEFS_SVH
 
-// Legacy compatibility header for early experiments. New RTL should prefer the
-// shared parameter definitions in rtl/dma_pkg.sv.
+// old compatibility defines for early experiments, new rtl should use dma_pkg
 `define DMA_ADDR_W      64
 `define DMA_DATA_W      64
 `define DMA_STRB_W      (`DMA_DATA_W / 8)

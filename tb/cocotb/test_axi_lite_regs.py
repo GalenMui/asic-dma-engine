@@ -3,6 +3,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
 
+# register offsets stay local to the test so each bus access reads like software
 CTRL = 0x00
 STATUS = 0x04
 SRC_ADDR_LO = 0x08
@@ -28,6 +29,7 @@ VERSION_VALUE = 0x00080005
 
 
 def _set_axil_idle(dut):
+    # put every master-driven channel in a quiet known state before reset
     dut.s_axil_awaddr.value = 0
     dut.s_axil_awprot.value = 0
     dut.s_axil_awvalid.value = 0
@@ -42,6 +44,7 @@ def _set_axil_idle(dut):
 
 
 async def reset_dut(dut):
+    # clear both the bus and the core-facing status inputs before releasing reset
     _set_axil_idle(dut)
     dut.busy_i.value = 0
     dut.done_set_i.value = 0
@@ -66,6 +69,7 @@ async def reset_dut(dut):
 
 
 async def axil_write(dut, addr, data, strb=0xF):
+    # launch address and data together but retire them independently like axi-lite allows
     dut.s_axil_awaddr.value = addr
     dut.s_axil_awprot.value = 0
     dut.s_axil_awvalid.value = 1
@@ -86,6 +90,7 @@ async def axil_write(dut, addr, data, strb=0xF):
             dut.s_axil_wvalid.value = 0
 
     while True:
+        # keep bready up until the slave returns the one write response
         await RisingEdge(dut.clk)
         if int(dut.s_axil_bvalid.value):
             resp = int(dut.s_axil_bresp.value)
@@ -97,6 +102,7 @@ async def axil_write(dut, addr, data, strb=0xF):
 
 
 async def axil_read(dut, addr):
+    # hold the read address until accepted, then wait for the matching response
     dut.s_axil_araddr.value = addr
     dut.s_axil_arprot.value = 0
     dut.s_axil_arvalid.value = 1
@@ -122,6 +128,7 @@ async def axil_read(dut, addr):
 
 @cocotb.test()
 async def register_read_write_and_status_clear(dut):
+    # cover normal storage, live status, read-only values, w1c bits, and bad offsets
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset_dut(dut)
 
@@ -148,6 +155,7 @@ async def register_read_write_and_status_clear(dut):
         (DESC_COUNT, 0x5),
         (MODE, 0x1),
     ):
+        # read every programmed value back instead of trusting the write response alone
         data, resp = await axil_read(dut, addr)
         assert resp == 0
         assert data == expected
@@ -159,6 +167,7 @@ async def register_read_write_and_status_clear(dut):
     dut.active_dst_addr_i.value = 0xABCDEF012
     dut.completed_desc_count_i.value = 0x3
     dut.completed_byte_count_lo_i.value = 0x80
+    # these registers are direct windows into the core-facing observability inputs
     data, resp = await axil_read(dut, DESC_INDEX)
     assert resp == 0
     assert data == 0x2
@@ -177,6 +186,7 @@ async def register_read_write_and_status_clear(dut):
         assert data == expected
 
     assert await axil_write(dut, VERSION, 0xDEADBEEF) == 0
+    # writes are accepted but the constant version value must not move
     data, resp = await axil_read(dut, VERSION)
     assert resp == 0
     assert data == VERSION_VALUE
@@ -201,6 +211,7 @@ async def register_read_write_and_status_clear(dut):
     dut.error_set_i.value = 0
     await RisingEdge(dut.clk)
 
+    # event inputs should stick in status and irq state after their pulses disappear
     data, resp = await axil_read(dut, STATUS)
     assert resp == 0
     assert (data & 0x6) == 0x6
@@ -216,6 +227,7 @@ async def register_read_write_and_status_clear(dut):
     data, _ = await axil_read(dut, IRQ_STATUS)
     assert (data & 0xF) == 0xF
 
+    # write-one-to-clear means zeros do nothing and ones clear only their matching bits
     assert await axil_write(dut, STATUS, 0x6) == 0
     assert await axil_write(dut, IRQ_STATUS, 0xF) == 0
     data, _ = await axil_read(dut, STATUS)
@@ -231,6 +243,7 @@ async def register_read_write_and_status_clear(dut):
 
 @cocotb.test()
 async def ctrl_write_generates_pulses(dut):
+    # ctrl bits should become short output pulses, never stored register state
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset_dut(dut)
 
